@@ -1,0 +1,242 @@
+# SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+openapi: 3.1.0
+info:
+  title: Field Day Commander Relay API
+  version: 1.0.0
+  description: >-
+    How Field Day Commander Relay talks to a Field Day Commander server. The relay
+    depends on v1, so only add to it. A breaking change needs a v2.
+    Clients must ignore response fields they don't recognize.
+servers:
+  - url: /api/relay/v1
+components:
+  securitySchemes:
+    relayToken:
+      type: http
+      scheme: bearer
+  parameters:
+    relayVersion:
+      name: X-Relay-Version
+      in: header
+      description: The relay's version, recorded by the server.
+      schema: { type: string, pattern: '^[0-9A-Za-z.+_-]{1,32}$' }
+  responses:
+    httpsRequired:
+      description: The request came over plain HTTP (code https_required). Relays must use HTTPS, unless the relay runs on the server's own machine and connects to localhost.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    unauthenticated:
+      description: The token is missing, unknown or revoked, or its event was deleted. Enroll again.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    tooManyRequests:
+      description: Rate limited. Wait for the time in the Retry-After header.
+    validationFailed:
+      description: The request as a whole is malformed.
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    RelaySummary:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+    Contact:
+      type: object
+      required: [idempotency_key, callsign, qso_time]
+      properties:
+        idempotency_key:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{16,64}$'
+          description: >-
+            Stable for this contact across retries and re-enrollment, and unique
+            within the event. Sending a known key again updates that contact. A
+            contact deleted on the server stays deleted.
+        replaces_key:
+          type: [string, 'null']
+          pattern: '^[A-Za-z0-9_-]{16,64}$'
+          description: >-
+            The key this contact had before an edit changed it. The contact
+            with that key takes idempotency_key and the edit. If idempotency_key
+            is already known, this acts like any repeat of it. If replaces_key
+            is unknown, the contact is stored as new. Send edits in the order
+            they were made.
+        deleted:
+          type: [boolean, 'null']
+          description: >-
+            True deletes the contact with idempotency_key instead of storing
+            it. Send it after the contact it deletes. Sending it again is safe.
+            Without a contact to delete, the key is remembered for ten minutes
+            in case the contact arrives late.
+        callsign: { type: string, maxLength: 20, pattern: '^[A-Za-z0-9/]+$' }
+        qso_time:
+          type: string
+          format: date-time
+          description: 'With a UTC offset or Z, to the second: 2026-06-27T18:05:00Z'
+        band: { type: [string, 'null'], maxLength: 10, description: 'Used when frequency_hz is missing or outside every band.' }
+        mode:
+          type: [string, 'null']
+          maxLength: 20
+          description: The logger's mode, such as SSB, FT8, or a group name like CW, PH, or DIG.
+        frequency_hz: { type: [integer, 'null'], minimum: 100000, maximum: 300000000000 }
+        operator: { type: [string, 'null'], maxLength: 20 }
+        station:
+          type: [string, 'null']
+          maxLength: 50
+          description: >-
+            Station name or hostname. Defaults to the relay's name. An unknown
+            station is created only if the person who enrolled the relay has
+            manage-stations. Otherwise the contact gets retry with
+            unknown_station until someone creates the station.
+        exchange_class: { type: [string, 'null'], maxLength: 10 }
+        section: { type: [string, 'null'], maxLength: 10 }
+        power_watts: { type: [integer, 'null'], minimum: 1, maximum: 100000 }
+        rst_sent: { type: [string, 'null'], maxLength: 4, pattern: '^([1-5][1-9][1-9]?|[+-][0-9]{1,2})$' }
+        rst_received: { type: [string, 'null'], maxLength: 4, pattern: '^([1-5][1-9][1-9]?|[+-][0-9]{1,2})$' }
+        grid_square: { type: [string, 'null'], maxLength: 6, pattern: '^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$' }
+        contact_name: { type: [string, 'null'], maxLength: 50 }
+        notes: { type: [string, 'null'], maxLength: 500 }
+    ContactResult:
+      type: object
+      required: [index, status]
+      properties:
+        index: { type: integer, description: The contact's position in the request. }
+        status:
+          type: string
+          enum: [accepted, rejected, retry]
+          description: >-
+            accepted: stored, remove it from the queue. rejected: will never be
+            stored, so don't resend it unchanged. retry: not stored, send it
+            again later.
+        contact_uuid: { type: string, description: 'Present when accepted, except after a delete.' }
+        code:
+          type: string
+          description: 'Rejected: invalid, invalid_contact or out_of_period. Retry: busy, server_error or unknown_station.'
+        message: { type: string, description: Present when rejected or unknown_station. }
+paths:
+  /enroll:
+    post:
+      summary: Trade a one-time enrollment code for a token
+      description: The token is only returned here. Limited to 10 requests a minute per address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, maxLength: 32, description: Case and separators are ignored. }
+                relay_version: { type: [string, 'null'], pattern: '^[0-9A-Za-z.+_-]{1,32}$' }
+      responses:
+        '201':
+          description: Enrolled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, relay]
+                properties:
+                  token: { type: string }
+                  relay: { $ref: '#/components/schemas/RelaySummary' }
+        '422':
+          description: The code is invalid, expired or already used (code invalid_code), or the request is malformed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/httpsRequired' }
+        '429': { $ref: '#/components/responses/tooManyRequests' }
+  /handshake:
+    get:
+      summary: Check compatibility and get the relay's event, stations and permissions
+      security: [{ relayToken: [] }]
+      parameters: [{ $ref: '#/components/parameters/relayVersion' }]
+      responses:
+        '200':
+          description: The server's capabilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [server_version, supported_api_versions, minimum_relay_version, server_time, relay, event, permissions, stations]
+                properties:
+                  server_version: { type: string }
+                  supported_api_versions: { type: array, items: { type: integer } }
+                  minimum_relay_version: { type: [string, 'null'], description: Older relays should ask to be updated. }
+                  server_time: { type: string, format: date-time }
+                  relay: { $ref: '#/components/schemas/RelaySummary' }
+                  event:
+                    type: [object, 'null']
+                    required: [name, starts_at, ends_at]
+                    properties:
+                      name: { type: string }
+                      starts_at: { type: string, format: date-time }
+                      ends_at: { type: string, format: date-time, description: When operating ends. }
+                  permissions:
+                    type: object
+                    required: [create_stations]
+                    properties:
+                      create_stations:
+                        type: boolean
+                        description: >-
+                          Whether a contact naming an unknown station creates it.
+                          Follows the current permissions of the person who
+                          enrolled the relay, so handshake again to refresh it.
+                  stations:
+                    type: array
+                    description: The event's stations, sorted by name. Handshake again to refresh the list.
+                    items:
+                      type: object
+                      required: [name, hostname]
+                      properties:
+                        name: { type: string }
+                        hostname: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/unauthenticated' }
+        '403': { $ref: '#/components/responses/httpsRequired' }
+        '429': { $ref: '#/components/responses/tooManyRequests' }
+  /contacts:
+    post:
+      summary: Store a batch of contacts
+      description: >-
+        Each contact succeeds or fails on its own, so a 200 can include rejected
+        contacts. Check every result. A value that breaks a field's pattern or
+        length rejects the whole contact, so leave out an optional value that
+        doesn't fit. Contacts are handled in request order. Limited to 120 requests a minute per relay.
+      security: [{ relayToken: [] }]
+      parameters: [{ $ref: '#/components/parameters/relayVersion' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contacts]
+              properties:
+                contacts:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/Contact' }
+      responses:
+        '200':
+          description: One result per contact, in request order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results: { type: array, items: { $ref: '#/components/schemas/ContactResult' } }
+        '401': { $ref: '#/components/responses/unauthenticated' }
+        '422': { $ref: '#/components/responses/validationFailed' }
+        '403': { $ref: '#/components/responses/httpsRequired' }
+        '429': { $ref: '#/components/responses/tooManyRequests' }

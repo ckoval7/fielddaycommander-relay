@@ -6,7 +6,7 @@ The server app is a separate repo, checked out at `/home/corey/fielddaycommander
 
 ## Status
 
-This repo has only project scaffolding so far. There's no Go module, and the server has no ingest endpoint yet.
+The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). There's no program yet: `cmd/`, enrollment, the keychain, the local UI and the tray are still to come. The server's API is in draft PR #90 on the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
 
 ## Stack
 
@@ -32,7 +32,7 @@ The UI is a small settings and status page served on localhost, plus a tray icon
 
 ## Log sources
 
-- **N3FJP network protocol (TCP 1000):** UTF-16LE, frames end with `\x03\x04\x07`, messages are `<BOR>…<EOR>`. The server relays everything to all clients, with no auth, handshake or version check. N3FJP's API on port 1100 is the other option. Which one the relay uses isn't decided yet.
+- **N3FJP network protocol (TCP 1000):** UTF-16LE, frames end with `\x03\x04\x07`, messages are `<BOR>…<EOR>`. There's no auth, handshake or version check. A server in TCP mode answers `OPEN` (`CLEAR`, `GET`..., `LIST`) and `CHECK` on the asking connection alone, and relays everything else to all clients. A server in file-share mode relays `OPEN` and `CHECK` too, which makes every PC beep and warn, so the relay sends one `OPEN` per connection and no `CHECK` until the server answers. The relay joins as a listening client and sends nothing else. It needs N3FJP's TCP network mode, and hasn't been run against real N3FJP software yet.
 - **Other loggers:** the app's listeners in `app/Console/Commands/*ListenCommand.php` show how it handles N1MM Logger+, WSJT-X/JTDX, fldigi and ADIF-over-UDP.
 - **N1MM peer network (12070), if ever joined:** never send `FUNCTIONKEY` (keys another PC's radio), `TIME` (sets its clock) or `FILE` (overwrites its data files).
 
