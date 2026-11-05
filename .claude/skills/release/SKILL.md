@@ -1,11 +1,11 @@
 ---
 name: release
-description: Use this skill to release Field Day Commander Agent. Triggers include a version bump, a release, tagging (vYY.MM.N) and "ship it". It runs vulnerability scans, updates dependencies, bumps the version, fast-forwards main and tags. Never bump or tag without completing the earlier steps.
+description: Use this skill to release Field Day Commander Relay. Triggers include a version bump, a release, tagging (vYY.MM.N) and "ship it". It runs vulnerability scans, updates dependencies, bumps the version, fast-forwards main and tags. Never bump or tag without completing the earlier steps.
 ---
 
 # Release
 
-Run the steps in order, and don't bump the version early. Agent versions are independent of the app's.
+Run the steps in order, and don't bump the version early. Relay versions are independent of the app's.
 
 Packaging and code signing aren't set up yet. When they are, add them here. Don't improvise them during a release.
 

@@ -1,9 +1,9 @@
 ---
 name: docs-prose
-description: Use this skill when writing or editing any user-facing prose for Field Day Commander Agent, including its UI text, error and status messages, installer text, README, how-to guides, release notes, and CHANGELOG.md entries. It sets the voice, punctuation rules (no em dashes), and naming so new text reads like the rest of Field Day Commander and like a person wrote it.
+description: Use this skill when writing or editing any user-facing prose for Field Day Commander Relay, including its UI text, error and status messages, installer text, README, how-to guides, release notes, and CHANGELOG.md entries. It sets the voice, punctuation rules (no em dashes), and naming so new text reads like the rest of Field Day Commander and like a person wrote it.
 ---
 
-# Field Day Commander Agent prose
+# Field Day Commander Relay prose
 
 This text is written by a ham for hams. It sounds like a club member who has run Field Day a few times and is showing you around the software. Plain, friendly, specific, a little dry humor now and then. Never salesy, never breathless.
 
@@ -20,7 +20,7 @@ Write like an experienced, approachable engineer helping another person get some
 - Avoid generic introductions, closing summaries, repetitive transitions, and marketing language.
 - Don't say the same thing in the introduction, the body, and the conclusion.
 - Don't add filler to make a page feel complete. Cover what the reader actually needs, and cover it well.
-- Assume the reader is intelligent but may be new to the agent.
+- Assume the reader is intelligent but may be new to the relay.
 
 ### Accuracy
 
@@ -40,7 +40,7 @@ The website and how-to guides are in the app repo's `github.io` branch, checked 
 
 ## The product name
 
-The server app is **Field Day Commander**, and this program is **Field Day Commander Agent**. "The agent" is fine after the first mention on a page or in a section. Use the full name in page titles, headings, meta tags, banners, export headers and the first mention on a page or in a section. After that, "FD Commander" is fine as a short name in the docs, how-to guides and FAQ, so a page doesn't repeat the full name in every paragraph. Never write it as "FDC", and don't use the `fd-commander` slug in prose.
+The server app is **Field Day Commander**, and this program is **Field Day Commander Relay**. "The relay" is fine after the first mention on a page or in a section. Use the full name in page titles, headings, meta tags, banners, export headers and the first mention on a page or in a section. After that, "FD Commander" is fine as a short name in the docs, how-to guides and FAQ, so a page doesn't repeat the full name in every paragraph. Never write it as "FDC", and don't use the `fd-commander` slug in prose.
 
 ## Punctuation
 
