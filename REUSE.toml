@@ -1,7 +1,7 @@
 version = 1
-SPDX-PackageName = "Field Day Commander Agent"
+SPDX-PackageName = "Field Day Commander Relay"
 SPDX-PackageSupplier = "Corey Koval <ckoval7@gmail.com>"
-SPDX-PackageDownloadLocation = "https://github.com/ckoval7/fielddaycommander-agent"
+SPDX-PackageDownloadLocation = "https://github.com/ckoval7/fielddaycommander-relay"
 
 # Source files carry their own SPDX headers. This file covers files that
 # cannot hold a comment (images, lock files) and the documentation.

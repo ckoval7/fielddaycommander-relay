@@ -1,6 +1,6 @@
 ---
 name: branch-workflow
-description: Use this skill for any of these tasks in Field Day Commander Agent: choosing a branch; starting, committing or merging work; merging feature branches into dev; or running Go, tests, gofmt, go vet or reuse lint.
+description: Use this skill for any of these tasks in Field Day Commander Relay: choosing a branch; starting, committing or merging work; merging feature branches into dev; or running Go, tests, gofmt, go vet or reuse lint.
 ---
 
 # Branch Workflow
@@ -34,8 +34,8 @@ git branch -D fix/thing                         # -D is needed after a squash
 The host doesn't have Go, so run it in a one-off container from the repo root. Once `go.mod` exists, use the image tag matching its `go` line instead of `golang:1`.
 
 ```bash
-gorun() { mkdir -p "$HOME/.cache/fdc-agent-go"; docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" \
-  -v "$HOME/.cache/fdc-agent-go":/cache -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
+gorun() { mkdir -p "$HOME/.cache/fdc-relay-go"; docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" \
+  -v "$HOME/.cache/fdc-relay-go":/cache -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
   golang:1 "$@"; }
 
 gorun go test ./path/to/pkg        # while working: the packages you touched
@@ -47,7 +47,7 @@ gorun gofmt -l .                   # must print nothing
 Run the Windows build before merging too, since Windows is the primary target:
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" -v "$HOME/.cache/fdc-agent-go":/cache \
+docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" -v "$HOME/.cache/fdc-relay-go":/cache \
   -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
   -e CGO_ENABLED=0 -e GOOS=windows -e GOARCH=amd64 golang:1 go build ./...
 ```
