@@ -1,0 +1,34 @@
+version = 1
+SPDX-PackageName = "Field Day Commander Agent"
+SPDX-PackageSupplier = "Corey Koval <ckoval7@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/ckoval7/fielddaycommander-agent"
+
+# Source files carry their own SPDX headers. This file covers files that
+# cannot hold a comment (images, lock files) and the documentation.
+
+# Creative works: images and documentation.
+[[annotations]]
+path = [
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "docs/**",
+]
+SPDX-FileCopyrightText = "2026 Corey Koval <ckoval7@gmail.com>"
+SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
+
+# Project metadata and tooling notes.
+[[annotations]]
+path = [
+    "CLAUDE.md",
+    "VERSION",
+    "go.mod",
+    "go.sum",
+    ".editorconfig",
+    ".gitattributes",
+    ".gitignore",
+    ".claude/**",
+]
+SPDX-FileCopyrightText = "2026 Corey Koval <ckoval7@gmail.com>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

@@ -1,0 +1,11 @@
+/dist/
+*.exe
+*.test
+*.out
+*.db
+*.db-shm
+*.db-wal
+.env
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
