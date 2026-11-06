@@ -14,6 +14,9 @@ path = [
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "docs/**",
+    "assets/relay.ico",
+    "internal/ui/web/assets/favicon.png",
+    "cmd/relay/rsrc_windows_amd64.syso",
 ]
 SPDX-FileCopyrightText = "2026 Corey Koval <ckoval7@gmail.com>"
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"

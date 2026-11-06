@@ -1,0 +1,87 @@
+/* SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com> */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+:root {
+  color-scheme: light dark;
+  --ink: light-dark(#1c1f24, #e8eaed);
+  --muted: light-dark(#5a6270, #a3abb8);
+  --line: light-dark(#d9dde3, #3a3f47);
+  --paper: light-dark(#ffffff, #1b1e23);
+  --good: light-dark(#17693a, #6fd39b);
+  --bad: light-dark(#a52a1c, #ff9c8f);
+  --accent: light-dark(#1f5fbf, #7fb0ff);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.5 system-ui, "Segoe UI", sans-serif;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+
+section {
+  border-top: 1px solid var(--line);
+  padding: 1rem 0;
+}
+
+.state { font-weight: 600; margin: 0 0 .5rem; }
+.state-online { color: var(--good); }
+.state-offline, .state-needs_enrollment, .state-https_required, .state-pin_mismatch,
+.state-untrusted_certificate, .state-server_too_old, .state-relay_too_old, .state-server_refused { color: var(--bad); }
+.problem { color: var(--bad); font-weight: 600; }
+.help { color: var(--muted); font-size: .9rem; }
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .15rem 1rem;
+  margin: 0;
+}
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+
+label { display: block; margin: .75rem 0; font-weight: 600; }
+
+input {
+  display: block;
+  width: 100%;
+  margin-top: .25rem;
+  padding: .5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  padding: .5rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--paper);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.quiet { background: transparent; color: var(--accent); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+code { font-size: .9rem; overflow-wrap: anywhere; }
+
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: .3rem .5rem .3rem 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+
+footer { color: var(--muted); font-size: .85rem; padding-top: 1rem; border-top: 1px solid var(--line); }

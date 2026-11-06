@@ -324,6 +324,53 @@ func (q *Queue) Apply(ctx context.Context, outcomes []Outcome) error {
 	return nil
 }
 
+// Attention is a contact a person may need to do something about.
+type Attention struct {
+	Callsign string
+	QSOTime  string
+	Station  string
+	Rejected bool
+	Code     string
+	Message  string
+}
+
+// NeedingAttention returns the newest contacts the server rejected or that wait
+// for a station to be created. Other retries sort themselves out.
+func (q *Queue) NeedingAttention(ctx context.Context, limit int) ([]Attention, error) {
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT payload, state, code, message FROM outbox
+		 WHERE state = ? OR (state = ? AND code = 'unknown_station')
+		 ORDER BY id DESC LIMIT ?`, stateRejected, statePending, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read queue: %w", err)
+	}
+	defer rows.Close()
+
+	var attention []Attention
+	for rows.Next() {
+		var payload, state, code, message string
+		if err := rows.Scan(&payload, &state, &code, &message); err != nil {
+			return nil, fmt.Errorf("read queue: %w", err)
+		}
+		var c contact.Contact
+		if err := json.Unmarshal([]byte(payload), &c); err != nil {
+			return nil, fmt.Errorf("decode queued contact: %w", err)
+		}
+		attention = append(attention, Attention{
+			Callsign: c.Callsign,
+			QSOTime:  c.QSOTime,
+			Station:  c.Station,
+			Rejected: state == stateRejected,
+			Code:     code,
+			Message:  message,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read queue: %w", err)
+	}
+	return attention, nil
+}
+
 // Counts returns how many contacts are in each state.
 func (q *Queue) Counts(ctx context.Context) (Counts, error) {
 	var counts Counts

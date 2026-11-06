@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,6 +174,37 @@ func TestPinnedKeyIsAcceptedAndAnyOtherIsRefused(t *testing.T) {
 
 	if _, err := New(Config{ServerURL: server.URL, PinSHA256: []byte("short")}); err == nil {
 		t.Error("a malformed pin was accepted")
+	}
+}
+
+func TestAnUntrustedServerCanBePinnedAfterAPersonAccepts(t *testing.T) {
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+
+	client, _ := New(Config{ServerURL: server.URL})
+	_, err := client.Handshake(context.Background())
+	if !IsCertificateError(err) {
+		t.Fatalf("err = %v", err)
+	}
+	if IsCertificateError(errors.New("connection refused")) {
+		t.Error("an ordinary failure isn't a certificate problem")
+	}
+
+	pin, err := FetchPin(context.Background(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256(server.Certificate().RawSubjectPublicKeyInfo)
+	if pin != hex.EncodeToString(want[:]) {
+		t.Errorf("pin = %s", pin)
+	}
+	if requests != 0 {
+		t.Errorf("reading the key sent %d requests", requests)
+	}
+
+	if _, err := FetchPin(context.Background(), "http://localhost:1"); err == nil {
+		t.Error("plain http has no key to pin")
 	}
 }
 

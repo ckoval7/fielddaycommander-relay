@@ -46,6 +46,7 @@ const (
 	NeedsEnrollment State = "needs_enrollment"
 	HTTPSRequired   State = "https_required"
 	PinMismatch     State = "pin_mismatch"
+	Untrusted       State = "untrusted_certificate"
 	ServerTooOld    State = "server_too_old"
 	RelayTooOld     State = "relay_too_old"
 	ServerRefused   State = "server_refused"
@@ -228,6 +229,10 @@ func (s *Sender) classify(err error) (time.Duration, bool) {
 	switch {
 	case errors.Is(err, api.ErrPinMismatch):
 		s.setState(PinMismatch)
+		return s.blocked, false
+	case api.IsCertificateError(err):
+		s.log.Warn("server's certificate isn't trusted", "error", err)
+		s.setState(Untrusted)
 		return s.blocked, false
 	case !errors.As(err, &statusErr):
 		s.log.Warn("couldn't reach the server", "error", err)

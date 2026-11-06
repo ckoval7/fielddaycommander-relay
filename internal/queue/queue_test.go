@@ -256,6 +256,36 @@ func TestAnEditForgetsTheOldKey(t *testing.T) {
 	}
 }
 
+func TestNeedingAttentionListsWhatAPersonCanFix(t *testing.T) {
+	q := open(t)
+	for _, call := range []string{"W1AW", "K1ABC", "N1MM", "W3OK"} {
+		put(t, q, normalized(t, call))
+	}
+	items := next(t, q)
+	apply(t, q,
+		Outcome{ID: items[0].ID, Status: Rejected, Code: "out_of_period", Message: "outside"},
+		Outcome{ID: items[1].ID, Status: Retry, Code: "unknown_station", Message: "create it"},
+		Outcome{ID: items[2].ID, Status: Retry, Code: "busy"},
+		Outcome{ID: items[3].ID, Status: Accepted},
+	)
+
+	got, err := q.NeedingAttention(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Callsign != "K1ABC" || got[0].Rejected || got[1].Callsign != "W1AW" || !got[1].Rejected {
+		t.Errorf("got %+v", got)
+	}
+
+	limited, err := q.NeedingAttention(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("limited = %+v", limited)
+	}
+}
+
 func TestNextRespectsTheLimit(t *testing.T) {
 	q := open(t)
 	for _, call := range []string{"W1AW", "K1ABC", "N1MM"} {

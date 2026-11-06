@@ -6,7 +6,7 @@ The server app is a separate repo, checked out at `/home/corey/fielddaycommander
 
 ## Status
 
-The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). There's no program yet: `cmd/`, enrollment, the keychain, the local UI and the tray are still to come. The server's API is in draft PR #90 on the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
+The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). `app`, `ui`, `secret`, `settings`, `tray` and `cmd/relay` make it a program. There's no installer or start-at-login yet, and the Windows keychain and tray have only been compiled here, because this environment can't run Windows binaries. Keychain support exists only on Windows, so other builds can't enroll. The server's API is in the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
 
 ## Stack
 

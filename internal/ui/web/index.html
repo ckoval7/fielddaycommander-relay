@@ -1,0 +1,119 @@
+{{- /*
+SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+SPDX-License-Identifier: GPL-3.0-or-later
+*/ -}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{text.Title}}</title>
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<main>
+<h1>{{text.Title}}</h1>
+{{if .ActionError}}<p class="problem" role="alert">{{text.ActionError}}</p>{{end}}
+
+<div id="status" aria-live="polite">{{template "status" .}}</div>
+
+<section>
+<h2>{{text.ServerHeading}}</h2>
+{{if .Status.Enrolled}}
+<form method="post" action="/forget">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<button type="submit" class="quiet">{{text.ForgetButton}}</button>
+<p class="help">{{text.ForgetHelp}}</p>
+</form>
+{{else}}
+<p>{{text.NotEnrolled}}</p>
+<p class="help">{{text.EnrollHelp}}</p>
+{{with .EnrollErr}}<p class="problem" role="alert">{{enrollError .Failure}}</p>{{end}}
+<form method="post" action="/enroll">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<label>{{text.ServerLabel}}
+<input name="server_url" value="{{.ServerURL}}" required autocomplete="off" spellcheck="false" placeholder="https://logs.example.org"></label>
+<label>{{text.CodeLabel}}
+<input name="code" value="{{.Code}}" required autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH-JKMN"></label>
+{{if and .EnrollErr .EnrollErr.Fingerprint}}
+<p>{{text.KeyLabel}}: <code>{{fingerprint .EnrollErr.Fingerprint}}</code></p>
+<input type="hidden" name="pin" value="{{.EnrollErr.Fingerprint}}">
+<button type="submit">{{text.AcceptButton}}</button>
+{{else}}
+<button type="submit">{{text.EnrollButton}}</button>
+{{end}}
+</form>
+{{end}}
+</section>
+
+<section>
+<h2>{{text.LoggerHeading}}</h2>
+{{if .LoggerError}}<p class="problem" role="alert">{{text.LoggerError}}</p>{{end}}
+<form method="post" action="/logger">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<label>{{text.LoggerAddressLabel}}
+<input name="address" value="{{.Status.LoggerAddress}}" autocomplete="off" spellcheck="false"></label>
+<p class="help">{{text.LoggerHelp}}</p>
+<button type="submit">{{text.LoggerButton}}</button>
+</form>
+</section>
+
+<footer>{{text.Version}} {{.Status.Version}}</footer>
+</main>
+</body>
+</html>
+
+{{define "status"}}
+<section>
+<h2>{{text.ServerHeading}}</h2>
+{{if .Status.Enrolled}}
+<p class="state state-{{.Status.Sender.State}}">{{senderState .Status.Sender.State}}</p>
+<dl>
+{{with .Status.RelayName}}<dt>{{text.RelayNameLabel}}</dt><dd>{{.}}</dd>{{end}}
+<dt>{{text.ServerAddressLabel}}</dt><dd>{{.Status.ServerURL}}</dd>
+{{with .Status.Sender.Event}}<dt>{{text.EventLabel}}</dt><dd>{{.}}</dd>{{end}}
+{{with shortTime .Status.Sender.LastSent}}<dt>{{text.LastSentLabel}}</dt><dd>{{.}}</dd>{{end}}
+</dl>
+{{if .Status.Pinned}}<p class="help">{{text.SelfSigned}}</p>{{end}}
+{{if .Status.Sender.ClockSkew}}<p class="problem">{{printf text.ClockWarning (minutes .Status.Sender.ClockSkew)}}</p>{{end}}
+{{else}}
+<p class="state">{{text.NotEnrolled}}</p>
+{{end}}
+</section>
+
+<section>
+<h2>{{text.LoggerHeading}}</h2>
+{{if not .Status.Source.Connected}}
+<p class="state state-offline">{{text.LoggerConnecting}}</p>
+{{else if not .Status.Source.LogAnswered}}
+<p class="state state-offline">{{text.LoggerWaiting}}</p>
+{{else}}
+<p class="state state-online">{{text.LoggerConnected}}</p>
+{{end}}
+</section>
+
+<section>
+<h2>{{text.QueueHeading}}</h2>
+<dl>
+<dt>{{text.Waiting}}</dt><dd>{{.Status.Counts.Pending}}</dd>
+<dt>{{text.Sent}}</dt><dd>{{.Status.Counts.Accepted}}</dd>
+<dt>{{text.Rejected}}</dt><dd>{{.Status.Counts.Rejected}}</dd>
+{{if .Status.Counts.Invalid}}<dt>{{text.Unreadable}}</dt><dd>{{.Status.Counts.Invalid}}</dd>{{end}}
+</dl>
+</section>
+
+{{if .Status.Attention}}
+<section>
+<h2>{{text.AttentionHeading}}</h2>
+<table>
+<thead><tr><th>{{text.AttentionCall}}</th><th>{{text.AttentionTime}}</th><th>{{text.AttentionStation}}</th><th>{{text.AttentionWhy}}</th></tr></thead>
+<tbody>
+{{range .Status.Attention}}<tr><td>{{.Callsign}}</td><td>{{qsoTime .QSOTime}}</td><td>{{.Station}}</td><td>{{attention .}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</section>
+{{end}}
+{{end}}

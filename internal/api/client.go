@@ -11,6 +11,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -150,6 +152,58 @@ func tlsConfig(pin []byte) *tls.Config {
 
 // ErrPinMismatch means a pinned server presented a different key.
 var ErrPinMismatch = errors.New("server's key doesn't match the pinned key")
+
+// IsCertificateError reports whether a request failed because the server's
+// certificate couldn't be trusted.
+func IsCertificateError(err error) bool {
+	var (
+		unknownAuthority x509.UnknownAuthorityError
+		hostname         x509.HostnameError
+		invalid          x509.CertificateInvalidError
+		verification     *tls.CertificateVerificationError
+	)
+	return errors.As(err, &unknownAuthority) || errors.As(err, &hostname) ||
+		errors.As(err, &invalid) || errors.As(err, &verification)
+}
+
+// FetchPin returns the hex pin of the public key a server presents, for a person
+// to compare and accept. It only completes the TLS handshake and sends nothing,
+// so an impostor learns nothing from it.
+func FetchPin(ctx context.Context, serverURL string) (string, error) {
+	base, err := baseURL(serverURL)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("server address: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return "", errors.New("only an https server has a key to pin")
+	}
+	address := parsed.Host
+	if parsed.Port() == "" {
+		address = net.JoinHostPort(parsed.Hostname(), "443")
+	}
+
+	dialer := tls.Dialer{Config: &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, //nolint:gosec // Only reads the key for a person to accept, and sends nothing.
+		ServerName:         parsed.Hostname(),
+	}}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	certificates := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certificates) == 0 {
+		return "", errors.New("server sent no certificate")
+	}
+	sum := sha256.Sum256(certificates[0].RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:]), nil
+}
 
 // StatusError is a response other than the one expected.
 type StatusError struct {

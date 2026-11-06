@@ -5,6 +5,7 @@ package sender
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -208,6 +209,7 @@ func TestServerRefusalsSetStateAndKeepContacts(t *testing.T) {
 		{"not found", &api.StatusError{StatusCode: 404}, ServerRefused},
 		{"malformed batch", &api.StatusError{StatusCode: 422}, ServerRefused},
 		{"wrong key", api.ErrPinMismatch, PinMismatch},
+		{"untrusted certificate", x509.UnknownAuthorityError{}, Untrusted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
