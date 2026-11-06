@@ -86,6 +86,15 @@ CREATE TABLE IF NOT EXISTS logger_records (
 	fields          TEXT NOT NULL
 );
 
+-- The key each contact from N1MM currently has, by N1MM's id for it.
+CREATE TABLE IF NOT EXISTS n1mm_records (
+	id              TEXT PRIMARY KEY,
+	idempotency_key TEXT NOT NULL,
+	callsign        TEXT NOT NULL,
+	qso_time        TEXT NOT NULL,
+	station         TEXT NOT NULL DEFAULT ''
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS meta (
 	name  TEXT PRIMARY KEY,
 	value TEXT NOT NULL
@@ -252,12 +261,20 @@ func (q *Queue) Put(ctx context.Context, c contact.Contact) (bool, error) {
 }
 
 // PutInvalid keeps a record that can't become a contact. Local data is
-// untrusted, so the text is capped and only the newest records are kept.
+// untrusted, so the text is capped and only the newest records are kept. Sources
+// re-read their logs, so a record already kept isn't kept twice.
 func (q *Queue) PutInvalid(ctx context.Context, source, reason, raw string) error {
 	if len(raw) > maxInvalidRaw {
 		raw = raw[:maxInvalidRaw]
 	}
 	err := q.inTx(ctx, func(tx *sql.Tx) error {
+		var seen int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM invalid WHERE source = ? AND raw = ?`, source, raw).Scan(&seen); err != nil {
+			return err
+		}
+		if seen > 0 {
+			return nil
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO invalid (source, reason, raw, created_ms) VALUES (?, ?, ?, ?)`,
 			source, reason, raw, q.now().UnixMilli()); err != nil {
@@ -365,6 +382,16 @@ func (q *Queue) Apply(ctx context.Context, outcomes []Outcome) error {
 	})
 	if err != nil {
 		return fmt.Errorf("record results: %w", err)
+	}
+	return nil
+}
+
+// RetryWaitingForStation sends contacts waiting for a station on the next round
+// instead of after their retry delay, because a person has just changed the station.
+func (q *Queue) RetryWaitingForStation(ctx context.Context) error {
+	if _, err := q.db.ExecContext(ctx,
+		`UPDATE outbox SET next_attempt_ms = 0 WHERE state = ? AND code = 'unknown_station'`, statePending); err != nil {
+		return fmt.Errorf("retry contacts waiting for a station: %w", err)
 	}
 	return nil
 }

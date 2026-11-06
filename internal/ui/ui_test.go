@@ -6,6 +6,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"html"
 	"io"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
+	"github.com/ckoval7/fielddaycommander-relay/internal/n1mm"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n3fjp"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 	"github.com/ckoval7/fielddaycommander-relay/internal/sender"
@@ -33,6 +36,18 @@ type fakeBackend struct {
 	addresses []string
 	role      string
 	listen    bool
+	choosing  int
+	removed   []string
+	removeErr error
+	n1mmOn    bool
+	n1mmLAN   bool
+	n1mmErr   error
+
+	station    string
+	override   bool
+	stationSet int
+	stationErr error
+	asked      int
 }
 
 func (f *fakeBackend) Status(context.Context) (app.Status, error) { return f.status, nil }
@@ -45,6 +60,22 @@ func (f *fakeBackend) SetLogger(role, address string, listen bool) error {
 	f.role, f.listen = role, listen
 	f.addresses = append(f.addresses, address)
 	return f.loggerErr
+}
+
+func (f *fakeBackend) SetN1MM(enabled, onNetwork bool) error {
+	f.n1mmOn, f.n1mmLAN = enabled, onNetwork
+	return f.n1mmErr
+}
+func (f *fakeBackend) SetStation(name string, override bool) error {
+	f.station, f.override = name, override
+	f.stationSet++
+	return f.stationErr
+}
+func (f *fakeBackend) AskServerAgain() { f.asked++ }
+func (f *fakeBackend) ChooseLogFile()  { f.choosing++ }
+func (f *fakeBackend) RemoveLogFile(path string) error {
+	f.removed = append(f.removed, path)
+	return f.removeErr
 }
 
 const testHost = "127.0.0.1:17311"
@@ -115,13 +146,13 @@ func TestChangesNeedThisRunsTokenAndTheSameOrigin(t *testing.T) {
 		{"cross-site fetch", good, map[string]string{"Sec-Fetch-Site": "cross-site"}},
 	}
 	for _, tt := range tests {
-		for _, path := range []string{"/forget", "/enroll", "/n3fjp"} {
+		for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/logfiles/choose", "/logfiles/remove"} {
 			if got := post(server, path, tt.form, tt.headers).Code; got != http.StatusForbidden {
 				t.Errorf("%s %s: %d", tt.name, path, got)
 			}
 		}
 	}
-	if backend.forgotten != 0 || len(backend.enrolled) != 0 || len(backend.addresses) != 0 {
+	if backend.forgotten != 0 || len(backend.enrolled) != 0 || len(backend.addresses) != 0 || backend.n1mmOn || backend.choosing != 0 || len(backend.removed) != 0 {
 		t.Errorf("a refused request changed something: %+v", backend)
 	}
 
@@ -176,7 +207,7 @@ func TestATabLeftOpenAcrossARestartGetsAFreshPageAndChangesNothing(t *testing.T)
 func TestGetCannotChangeAnything(t *testing.T) {
 	backend := &fakeBackend{}
 	server := newServer(t, backend)
-	for _, path := range []string{"/forget", "/enroll", "/n3fjp"} {
+	for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/logfiles/choose", "/logfiles/remove"} {
 		if got := get(server, path).Code; got != http.StatusMethodNotAllowed {
 			t.Errorf("%s: %d", path, got)
 		}
@@ -366,12 +397,12 @@ func TestTheRoleCanBeChosen(t *testing.T) {
 
 func TestTheServerRoleShowsItsConnections(t *testing.T) {
 	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{ServerRole: true, N3FJPServer: n3fjp.ServerStatus{Listening: true, Clients: 3, Records: 12}}}), "/").Body.String())
-	for _, want := range []string{pageWords.ServerReadyPill, pageWords.ServerClients + ": 3", pageWords.ServerRecords + ": 12", `name="listen_on_network"`, `value="server" checked`} {
+	for _, want := range []string{pageWords.ServerReadyPill, pageWords.ServerClients + ": 3", pageWords.ServerRecords + ": 12", `name="listen_on_network"`, `value="server" data-autosave checked`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if !regexp.MustCompile(`data-role="client" hidden`).MatchString(body) || regexp.MustCompile(`data-role="server" hidden`).MatchString(body) {
+	if strings.Contains(body, pageWords.LoggerAddressLabel) {
 		t.Error("only the server role's settings should show")
 	}
 }
@@ -379,12 +410,11 @@ func TestTheServerRoleShowsItsConnections(t *testing.T) {
 func TestOtherPCsCanOnlyConnectInTheServerRole(t *testing.T) {
 	checkbox := regexp.MustCompile(`<input type="checkbox"[^>]*name="listen_on_network"[^>]*>`)
 
-	client := checkbox.FindString(get(newServer(t, &fakeBackend{}), "/").Body.String())
-	if !strings.Contains(client, " disabled") {
+	if client := checkbox.FindString(get(newServer(t, &fakeBackend{}), "/").Body.String()); client != "" {
 		t.Errorf("client role: %s", client)
 	}
 	server := checkbox.FindString(get(newServer(t, &fakeBackend{status: app.Status{ServerRole: true}}), "/").Body.String())
-	if server == "" || strings.Contains(server, " disabled") {
+	if server == "" {
 		t.Errorf("server role: %s", server)
 	}
 }
@@ -494,7 +524,292 @@ func TestTheThemeLoadsBeforeThePagePaints(t *testing.T) {
 
 func TestTheScriptSwapsOnlyTheStatus(t *testing.T) {
 	body := get(newServer(t, &fakeBackend{}), "/status").Body.String()
-	if regexp.MustCompile(`<form|<html`).MatchString(body) {
-		t.Error("the refreshed part must leave the forms alone")
+	if strings.Contains(body, "<html") {
+		t.Error("the refreshed part is a whole page")
+	}
+	// Buttons can be redrawn, but anything a person types into can't be.
+	body = get(newServer(t, &fakeBackend{status: app.Status{LogFiles: []logfile.Status{{Path: `C:\a.adi`}}}}), "/status").Body.String()
+	inputs := regexp.MustCompile(`<input `).FindAllString(body, -1)
+	hidden := regexp.MustCompile(`<input type="hidden"`).FindAllString(body, -1)
+	if len(inputs) != len(hidden) || strings.Contains(body, "<textarea") || strings.Contains(body, "<select") {
+		t.Error("the refreshed part holds a field a person could be typing in")
+	}
+}
+
+func TestTheFileWindowCanBeAskedForAndAFileRemoved(t *testing.T) {
+	backend := &fakeBackend{}
+	server := newServer(t, backend)
+	form := url.Values{"form_token": {server.formToken}}
+
+	if got := post(server, "/logfiles/choose", form, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("choose: %d", got)
+	}
+	if backend.choosing != 1 {
+		t.Errorf("choosing = %d", backend.choosing)
+	}
+
+	path := `C:\Logs\wsjtx_log.adi`
+	form.Set("path", path)
+	if got := post(server, "/logfiles/remove", form, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("remove: %d", got)
+	}
+	if len(backend.removed) != 1 || backend.removed[0] != path {
+		t.Errorf("removed = %v", backend.removed)
+	}
+
+	backend.removeErr = errors.New("disk full")
+	body := html.UnescapeString(post(server, "/logfiles/remove", form, nil).Body.String())
+	if !strings.Contains(body, pageWords.ActionError) {
+		t.Error("no explanation")
+	}
+}
+
+func TestThePageCannotNameAFileToWatch(t *testing.T) {
+	body := get(newServer(t, &fakeBackend{}), "/").Body.String()
+	for _, unwanted := range []string{"<textarea", `type="file"`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("page has %q", unwanted)
+		}
+	}
+}
+
+func TestLogFilesShowWhatTheyAreDoing(t *testing.T) {
+	path := `C:\Logs\wsjtx_log.adi`
+	files := []logfile.Status{
+		{Path: path, State: logfile.Watching, Contacts: 12, Outside: 3400},
+		{Path: `C:\Logs\gone.adi`, State: logfile.Missing},
+	}
+	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{LogFiles: files}}), "/status").Body.String())
+	for _, want := range []string{
+		path,
+		"<td>12</td><td>3400</td>",
+		pageWords.LogFilesHeading,
+		pageWords.LogFileAddButton,
+		pageWords.LogFileRemoveButton,
+		`name="path" value="` + path + `"`,
+		fileLabels[logfile.Watching],
+		fileStates[logfile.Missing],
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	empty := html.UnescapeString(get(newServer(t, &fakeBackend{}), "/status").Body.String())
+	if strings.Contains(empty, "<th>"+pageWords.LogFilePath) {
+		t.Error("an empty list of files takes up room")
+	}
+	if !strings.Contains(empty, pageWords.LogFileAddButton) {
+		t.Error("no way to add the first file")
+	}
+}
+
+func TestTheAddButtonExplainsWhenItCannotBeUsed(t *testing.T) {
+	tests := []struct {
+		status app.Status
+		want   string
+	}{
+		{app.Status{ChoosingLogFile: true}, pageWords.LogFileChoosing},
+		{app.Status{LogFilesFull: true}, pageWords.LogFilesFullText},
+	}
+	for _, tt := range tests {
+		body := html.UnescapeString(get(newServer(t, &fakeBackend{status: tt.status}), "/status").Body.String())
+		if !strings.Contains(body, tt.want) || !strings.Contains(body, "disabled") {
+			t.Errorf("%+v: wrong page", tt.status)
+		}
+	}
+	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{LogFileChooseFailed: true}}), "/status").Body.String())
+	if !strings.Contains(body, pageWords.LogFileChooseFailed) || strings.Contains(body, "disabled") {
+		t.Error("a failed try should explain itself and let the person try again")
+	}
+}
+
+func TestEveryFileStateHasWords(t *testing.T) {
+	for _, state := range []logfile.State{logfile.Starting, logfile.WaitingForEvent, logfile.Watching, logfile.Missing, logfile.Unreadable, logfile.NotADIF} {
+		if fileLabelText(state) == "" {
+			t.Errorf("no label for %s", state)
+		}
+	}
+}
+
+func TestWithN3FJPOffNothingLooksForIt(t *testing.T) {
+	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{N3FJPOff: true}}), "/").Body.String())
+	for _, unwanted := range []string{pageWords.LoggerConnecting, pageWords.LoggerLookingPill} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("page says %q", unwanted)
+		}
+	}
+	for _, want := range []string{pageWords.LoggerOffPill, pageWords.N3FJPUseButton} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestN1MMCanBeTurnedOn(t *testing.T) {
+	backend := &fakeBackend{}
+	server := newServer(t, backend)
+	form := url.Values{"form_token": {server.formToken}, "enabled": {"on"}, "on_network": {"on"}}
+	if got := post(server, "/n1mm", form, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("got %d", got)
+	}
+	if !backend.n1mmOn || !backend.n1mmLAN {
+		t.Errorf("backend = %+v", backend)
+	}
+	backend.n1mmErr = errors.New("disk full")
+	body := html.UnescapeString(post(server, "/n1mm", url.Values{"form_token": {server.formToken}}, nil).Body.String())
+	if !strings.Contains(body, pageWords.ActionError) || backend.n1mmOn {
+		t.Error("no explanation, or the setting wasn't passed on")
+	}
+}
+
+func TestN1MMShowsWhatItIsDoing(t *testing.T) {
+	status := func(s app.Status) string {
+		return html.UnescapeString(get(newServer(t, &fakeBackend{status: s}), "/").Body.String())
+	}
+
+	off := status(app.Status{})
+	for _, unwanted := range []string{pageWords.N1MMListeningPill, pageWords.N1MMBlocked} {
+		if strings.Contains(off, unwanted) {
+			t.Errorf("with N1MM off, the page says %q", unwanted)
+		}
+	}
+	if !strings.Contains(off, pageWords.N1MMEnableLabel) || strings.Contains(off, `name="enabled" data-autosave checked`) {
+		t.Error("no way to turn it on, or it starts on")
+	}
+
+	blocked := status(app.Status{N1MMEnabled: true})
+	for _, want := range []string{pageWords.N1MMBlocked, pageWords.N1MMBlockedPill, `name="enabled" data-autosave checked`} {
+		if !strings.Contains(blocked, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+
+	listening := status(app.Status{N1MMEnabled: true, N1MMOnNetwork: true, N1MM: n1mm.Status{Listening: true, Contacts: 7, Dropped: 2}})
+	for _, want := range []string{pageWords.N1MMListeningPill, pageWords.N1MMContacts + ": 7", fmt.Sprintf(pageWords.N1MMDropped, 2), `name="on_network" data-autosave checked`} {
+		if !strings.Contains(listening, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestFilesShowTheirNameFirst(t *testing.T) {
+	for path, want := range map[string][2]string{
+		`C:\Users\Ann\AppData\Local\WSJT-X\wsjtx_log.adi`: {"wsjtx_log.adi", `C:\Users\Ann\AppData\Local\WSJT-X\`},
+		"/home/ann/log.adi": {"log.adi", "/home/ann/"},
+		"bare.adi":          {"bare.adi", ""},
+	} {
+		if got := fileName(path); got != want[0] {
+			t.Errorf("%s: name %q", path, got)
+		}
+		if got := fileFolder(path); got != want[1] {
+			t.Errorf("%s: folder %q", path, got)
+		}
+	}
+}
+
+func TestLongHelpStaysBehindTheHelpButton(t *testing.T) {
+	status := stationStatus("GOTA", true, "GOTA")
+	status.ServerRole = true
+	status.N1MMEnabled = true
+	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: status}), "/").Body.String())
+	for _, help := range []string{
+		pageWords.StationHelp, pageWords.StationOverrideHelp, pageWords.StationNewHelp, pageWords.ForgetHelp,
+		pageWords.LogFilesHelp, pageWords.LogFilesLimits, pageWords.RoleHelp, pageWords.ListenHelp,
+		pageWords.N1MMHelp, pageWords.N1MMLimits, pageWords.N1MMNetworkHelp,
+	} {
+		at := strings.Index(body, help)
+		if at < 0 {
+			t.Errorf("page lacks %q", help)
+			continue
+		}
+		if opened, closed := strings.LastIndex(body[:at], "<details"), strings.LastIndex(body[:at], "</details>"); opened < closed || opened < 0 {
+			t.Errorf("%q isn't behind a help button", help)
+		}
+	}
+}
+
+func TestN1MMSaysLittleUntilItIsOn(t *testing.T) {
+	off := html.UnescapeString(get(newServer(t, &fakeBackend{}), "/").Body.String())
+	for _, unwanted := range []string{pageWords.N1MMHelp, pageWords.N1MMNetworkLabel, pageWords.N1MMNetworkHelp} {
+		if strings.Contains(off, unwanted) {
+			t.Errorf("with N1MM off, the page says %q", unwanted)
+		}
+	}
+	on := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{N1MMEnabled: true}}), "/").Body.String())
+	for _, want := range []string{pageWords.N1MMHelp, pageWords.N1MMNetworkLabel, pageWords.N1MMNetworkHelp, pageWords.N1MMLimits} {
+		if !strings.Contains(on, want) {
+			t.Errorf("with N1MM on, the page lacks %q", want)
+		}
+	}
+	// The warning has to be readable before the box is ticked, since ticking applies at once.
+	if at := strings.Index(on, pageWords.N1MMNetworkWarning); at < 0 || strings.LastIndex(on[:at], "<details") > strings.LastIndex(on[:at], "</details>") {
+		t.Error("the network warning should be on the page without opening help")
+	}
+}
+
+func TestChoicesSaveThemselvesButATypedAddressKeepsItsButton(t *testing.T) {
+	client := get(newServer(t, &fakeBackend{}), "/").Body.String()
+	if !strings.Contains(client, `name="address"`) || !strings.Contains(client, `value="client" data-autosave checked`) || !strings.Contains(client, `name="enabled" data-autosave`) {
+		t.Error("the client role's choices aren't set to save")
+	}
+	if got := strings.Count(client, `action="/n1mm"`); got != 1 {
+		t.Errorf("%d N1MM forms", got)
+	}
+	n1mmForm := client[strings.Index(client, `action="/n1mm"`):]
+	n1mmForm = n1mmForm[:strings.Index(n1mmForm, "</form>")]
+	if strings.Contains(n1mmForm, "<button") {
+		t.Error("the N1MM form still has a save button")
+	}
+	addressForm := client[strings.Index(client, `action="/n3fjp"`):]
+	addressForm = addressForm[:strings.Index(addressForm, "</form>")]
+	if !strings.Contains(addressForm, "<button") {
+		t.Error("a typed address has no way to be saved")
+	}
+
+	server := get(newServer(t, &fakeBackend{status: app.Status{ServerRole: true, LoggerAddress: "127.0.0.1:1000"}}), "/").Body.String()
+	if !strings.Contains(server, `name="listen_on_network" data-autosave`) || !strings.Contains(server, `type="hidden" name="address" value="127.0.0.1:1000"`) {
+		t.Error("the server role loses the client address or its network choice doesn't save")
+	}
+}
+
+func TestN3FJPCanBeTurnedBackOn(t *testing.T) {
+	body := html.UnescapeString(get(newServer(t, &fakeBackend{status: app.Status{N3FJPOff: true, LoggerAddress: "192.168.1.5:1000"}}), "/").Body.String())
+	for _, want := range []string{pageWords.N3FJPOffText, pageWords.N3FJPUseButton, `name="role" value="client"`, `name="address" value="192.168.1.5:1000"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, pageWords.RoleHeading) {
+		t.Error("the role list takes up room while N3FJP is off")
+	}
+}
+
+func TestTheServerComesBeforeLogFiles(t *testing.T) {
+	for name, status := range map[string]app.Status{
+		"not connected": {},
+		"connected":     {Enrolled: true, ServerURL: "https://logs.example.org"},
+	} {
+		body := html.UnescapeString(get(newServer(t, &fakeBackend{status: status}), "/").Body.String())
+		heading := pageWords.ConnectHeading
+		if status.Enrolled {
+			heading = pageWords.ServerSetupHeading
+		}
+		card := func(title string) int { return strings.Index(body, ">"+title+"</h2>") }
+		strip, server, files, n3fjpCard := strings.Index(body, pageWords.Waiting), card(heading), card(pageWords.LogFilesHeading), card(pageWords.SetupHeading)
+		if !(strip < server && server < files && files < n3fjpCard) {
+			t.Errorf("%s: status %d, server %d, files %d, N3FJP %d", name, strip, server, files, n3fjpCard)
+		}
+	}
+}
+
+func TestTheRefreshCoversBothPartsAndNotTheServerForm(t *testing.T) {
+	body := get(newServer(t, &fakeBackend{}), "/status").Body.String()
+	for _, want := range []string{`<div id="status">`, `<div id="log-files">`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refresh lacks %q", want)
+		}
+	}
+	if strings.Contains(body, `name="code"`) || strings.Contains(body, `name="server_url"`) {
+		t.Error("refreshing would wipe a half-typed enrollment code")
 	}
 }

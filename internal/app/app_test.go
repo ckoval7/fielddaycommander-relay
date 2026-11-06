@@ -13,11 +13,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
 	"github.com/ckoval7/fielddaycommander-relay/internal/settings"
 )
@@ -61,6 +63,7 @@ type fakeServer struct {
 	enrollments int
 	authSeen    []string
 	enroll      func(w http.ResponseWriter)
+	received    []string
 }
 
 func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -83,9 +86,28 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"event":       map[string]any{"name": "Field Day", "starts_at": "2026-06-27T18:00:00Z", "ends_at": "2026-06-28T21:00:00Z"},
 			"permissions": map[string]any{"create_stations": true}, "stations": []any{},
 		})
+	case "/api/relay/v1/contacts":
+		var body struct {
+			Contacts []struct {
+				Callsign string `json:"callsign"`
+			} `json:"contacts"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		results := []map[string]any{}
+		for i, c := range body.Contacts {
+			f.received = append(f.received, c.Callsign)
+			results = append(results, map[string]any{"index": i, "status": "accepted", "contact_uuid": "uuid-" + c.Callsign})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (f *fakeServer) contacts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.received...)
 }
 
 func (f *fakeServer) seenAuth() []string {
@@ -483,5 +505,289 @@ func TestServerAddressesAreTidied(t *testing.T) {
 		if got := normalizeServerURL(raw); got != want {
 			t.Errorf("%q: got %q", raw, got)
 		}
+	}
+}
+
+const logFileText = "<ADIF_VER:5>3.1.4<EOH>\n" +
+	"<CALL:5>K1ABC<QSO_DATE:8>20260627<TIME_ON:4>1900<BAND:3>20m<MODE:3>FT8<EOR>\n" +
+	"<CALL:5>W2OLD<QSO_DATE:8>20190101<TIME_ON:4>1900<BAND:3>20m<MODE:3>FT8<EOR>\n"
+
+func TestALogFileReachesTheServerWithN3FJPOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wsjtx_log.adi")
+	if err := os.WriteFile(path, []byte(logFileText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := &fakeServer{}
+	backend := httptest.NewServer(server)
+	defer backend.Close()
+
+	dir := t.TempDir()
+	h := start(t, dir, &memoryStore{})
+	if err := h.app.SetLogger(RoleOff, "", false); err != nil {
+		t.Fatal(err)
+	}
+	h.choose(t, path)
+
+	// Before connecting, the relay doesn't know which contacts belong to the event.
+	eventually(t, "the watcher to wait", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return len(status.LogFiles) == 1 && status.LogFiles[0].State == logfile.WaitingForEvent
+	})
+	status, _ := h.app.Status(context.Background())
+	if status.Counts.Pending != 0 || !status.N3FJPOff {
+		t.Errorf("status = %+v", status)
+	}
+
+	if err := h.app.Enroll(context.Background(), EnrollRequest{ServerURL: backend.URL, Code: "ABCD"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the contact to arrive", func() bool { return len(server.contacts()) > 0 })
+	if got := server.contacts(); len(got) != 1 || got[0] != "K1ABC" {
+		t.Errorf("server received %v", got)
+	}
+	eventually(t, "the count of old contacts", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return status.LogFiles[0].Outside == 1 && status.LogFiles[0].Contacts == 1
+	})
+	h.app.mu.RLock()
+	defer h.app.mu.RUnlock()
+	if h.app.source != nil || h.app.server != nil || h.app.feed != nil {
+		t.Error("something is still looking for N3FJP")
+	}
+}
+
+func TestDisconnectingForgetsTheEventsDatesButChangingRoleKeepsThem(t *testing.T) {
+	server := &fakeServer{}
+	backend := httptest.NewServer(server)
+	defer backend.Close()
+	h := start(t, t.TempDir(), &memoryStore{})
+	if err := h.app.Enroll(context.Background(), EnrollRequest{ServerURL: backend.URL, Code: "ABCD"}); err != nil {
+		t.Fatal(err)
+	}
+	known := func() bool {
+		_, _, found, err := h.app.queue.EventPeriod(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	eventually(t, "the event's dates", known)
+
+	// Stay offline: no handshake can bring the dates back during this check.
+	backend.Close()
+	if err := h.app.SetLogger(RoleOff, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if !known() {
+		t.Error("changing role forgot the dates")
+	}
+	if err := h.app.Forget(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if known() {
+		t.Error("disconnecting kept the dates")
+	}
+}
+
+func TestChangingLogFilesLeavesN3FJPAlone(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	h.app.mu.RLock()
+	before := h.app.source
+	h.app.mu.RUnlock()
+
+	first := filepath.Join(t.TempDir(), "a.adi")
+	h.choose(t, first)
+	h.app.mu.RLock()
+	after := h.app.source
+	h.app.mu.RUnlock()
+	if before != after {
+		t.Error("N3FJP was restarted")
+	}
+
+	saved, _ := settings.Load(h.dir)
+	if len(saved.LogFiles) != 1 || saved.LogFiles[0] != first {
+		t.Errorf("saved = %+v", saved)
+	}
+	status, _ := h.app.Status(context.Background())
+	if len(status.LogFiles) != 1 || status.LogFiles[0].Path != first {
+		t.Errorf("status = %+v", status.LogFiles)
+	}
+
+	if err := h.app.RemoveLogFile(`not on the list`); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ = h.app.Status(context.Background()); len(status.LogFiles) != 1 {
+		t.Errorf("removed the wrong file: %+v", status.LogFiles)
+	}
+	if err := h.app.RemoveLogFile(first); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ = h.app.Status(context.Background()); len(status.LogFiles) != 0 {
+		t.Errorf("still watching %+v", status.LogFiles)
+	}
+	if saved, _ = settings.Load(h.dir); len(saved.LogFiles) != 0 {
+		t.Errorf("saved = %+v", saved)
+	}
+}
+
+// choose goes through the file window as if the person chose path.
+func (h *harness) choose(t *testing.T, path string) {
+	t.Helper()
+	h.app.mu.Lock()
+	h.app.cfg.PickLogFile = func() (string, error) { return path, nil }
+	h.app.mu.Unlock()
+	h.app.ChooseLogFile()
+	eventually(t, "the choice to finish", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return !status.ChoosingLogFile
+	})
+}
+
+func TestChoosingTheSameFileTwiceAddsItOnce(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	path := filepath.Join(t.TempDir(), "a.adi")
+	h.choose(t, path)
+	h.choose(t, path)
+	if status, _ := h.app.Status(context.Background()); len(status.LogFiles) != 1 {
+		t.Errorf("status = %+v", status.LogFiles)
+	}
+}
+
+func TestChangingYourMindChangesNothing(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	h.choose(t, "")
+	status, _ := h.app.Status(context.Background())
+	if len(status.LogFiles) != 0 || status.LogFileChooseFailed {
+		t.Errorf("status = %+v", status)
+	}
+}
+
+func TestOnlyOneFileWindowShowsAtATime(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	opened := make(chan struct{}, 8)
+	answer := make(chan string)
+	h.app.mu.Lock()
+	h.app.cfg.PickLogFile = func() (string, error) {
+		opened <- struct{}{}
+		return <-answer, nil
+	}
+	h.app.mu.Unlock()
+
+	h.app.ChooseLogFile()
+	h.app.ChooseLogFile()
+	<-opened
+	status, _ := h.app.Status(context.Background())
+	if !status.ChoosingLogFile {
+		t.Error("the page doesn't know the window is showing")
+	}
+	answer <- ""
+	eventually(t, "the window to close", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return !status.ChoosingLogFile
+	})
+	if len(opened) != 0 {
+		t.Error("a second window opened")
+	}
+}
+
+func TestAFailedFileWindowIsReportedAndCanBeRetried(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	h.app.mu.Lock()
+	h.app.cfg.PickLogFile = func() (string, error) { return "", errors.New("no window") }
+	h.app.mu.Unlock()
+	h.app.ChooseLogFile()
+	eventually(t, "the failure", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return status.LogFileChooseFailed
+	})
+
+	path := filepath.Join(t.TempDir(), "a.adi")
+	h.choose(t, path)
+	status, _ := h.app.Status(context.Background())
+	if status.LogFileChooseFailed || len(status.LogFiles) != 1 {
+		t.Errorf("status = %+v", status)
+	}
+}
+
+func TestTheFileListHasALimit(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	dir := t.TempDir()
+	for i := range maxLogFiles {
+		h.choose(t, filepath.Join(dir, strconv.Itoa(i)))
+	}
+	status, _ := h.app.Status(context.Background())
+	if !status.LogFilesFull || len(status.LogFiles) != maxLogFiles {
+		t.Errorf("%d files, full %v", len(status.LogFiles), status.LogFilesFull)
+	}
+	h.choose(t, filepath.Join(dir, "one too many"))
+	if status, _ = h.app.Status(context.Background()); len(status.LogFiles) != maxLogFiles {
+		t.Errorf("%d files", len(status.LogFiles))
+	}
+}
+
+func TestChoosingWithNoFileWindowIsReported(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	h.app.ChooseLogFile()
+	eventually(t, "the failure", func() bool {
+		status, _ := h.app.Status(context.Background())
+		return status.LogFileChooseFailed
+	})
+}
+
+func TestN1MMStartsOnlyWhenAskedAndSurvivesOtherChanges(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	status, _ := h.app.Status(context.Background())
+	if status.N1MMEnabled || status.N1MM.Listening {
+		t.Errorf("listening without being asked: %+v", status.N1MM)
+	}
+
+	// The network setting means nothing while N1MM is off.
+	if err := h.app.SetN1MM(false, true); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := settings.Load(h.dir); saved.N1MMOnNetwork {
+		t.Errorf("saved = %+v", saved)
+	}
+
+	if err := h.app.SetN1MM(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := settings.Load(h.dir); !saved.N1MMEnabled || saved.N1MMOnNetwork {
+		t.Errorf("saved = %+v", saved)
+	}
+	h.app.mu.RLock()
+	listener := h.app.n1mm
+	h.app.mu.RUnlock()
+	if listener == nil {
+		t.Fatal("not started")
+	}
+
+	// A role change restarts N3FJP but must not close N1MM's port.
+	if err := h.app.SetLogger(RoleOff, "", false); err != nil {
+		t.Fatal(err)
+	}
+	h.app.mu.RLock()
+	after := h.app.n1mm
+	h.app.mu.RUnlock()
+	if after != listener {
+		t.Error("N1MM was restarted")
+	}
+
+	if err := h.app.SetN1MM(true, false); err != nil {
+		t.Fatal(err)
+	}
+	h.app.mu.RLock()
+	after = h.app.n1mm
+	h.app.mu.RUnlock()
+	if after != listener {
+		t.Error("saving the same settings restarted N1MM")
+	}
+
+	if err := h.app.SetN1MM(false, true); err != nil {
+		t.Fatal(err)
+	}
+	status, _ = h.app.Status(context.Background())
+	if status.N1MMEnabled || status.N1MMOnNetwork || status.N1MM.Listening {
+		t.Errorf("status = %+v", status)
 	}
 }

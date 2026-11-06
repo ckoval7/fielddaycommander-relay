@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -303,8 +304,8 @@ func TestNextRespectsTheLimit(t *testing.T) {
 func TestInvalidRecordsAreCapped(t *testing.T) {
 	q := open(t)
 	ctx := context.Background()
-	for range maxInvalidRows + 5 {
-		if err := q.PutInvalid(ctx, "n3fjp", "callsign", strings.Repeat("x", maxInvalidRaw+1)); err != nil {
+	for i := range maxInvalidRows + 5 {
+		if err := q.PutInvalid(ctx, "n3fjp", "callsign", fmt.Sprintf("%d %s", i, strings.Repeat("x", maxInvalidRaw+1))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -434,5 +435,74 @@ func TestResetSyncKeepsContactsAndForgetsTheServer(t *testing.T) {
 	}
 	if put(t, q, c) {
 		t.Error("the upload history should survive")
+	}
+}
+
+func TestTheSameInvalidRecordIsKeptOnce(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	for _, raw := range []string{"bad", "bad", "worse"} {
+		if err := q.PutInvalid(ctx, "logfile", "reason", raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := q.PutInvalid(ctx, "n3fjp", "reason", "bad"); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := q.Counts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Invalid != 3 {
+		t.Errorf("%d invalid, want 3", counts.Invalid)
+	}
+}
+
+func TestTheEventPeriodOutlastsASyncResetButNotBeingForgotten(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	if _, _, known, err := q.EventPeriod(ctx); err != nil || known {
+		t.Fatalf("new queue: known %v, %v", known, err)
+	}
+
+	start := time.Date(2026, 6, 27, 14, 0, 0, 0, time.FixedZone("EDT", -4*3600))
+	end := start.Add(27 * time.Hour)
+	for range 2 {
+		if err := q.SetEventPeriod(ctx, start, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gotStart, gotEnd, known, err := q.EventPeriod(ctx)
+	if err != nil || !known || !gotStart.Equal(start) || !gotEnd.Equal(end) {
+		t.Errorf("got %v to %v, known %v, %v", gotStart, gotEnd, known, err)
+	}
+
+	if err := q.ResetSync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, known, _ := q.EventPeriod(ctx); !known {
+		t.Error("changing the logger forgot the event's dates")
+	}
+	if err := q.ForgetEventPeriod(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, known, _ := q.EventPeriod(ctx); known {
+		t.Error("still knows the old event's dates")
+	}
+}
+
+func TestPickingAStationRetriesOnlyContactsWaitingForOne(t *testing.T) {
+	q := open(t)
+	put(t, q, normalized(t, "W1AW"))
+	put(t, q, normalized(t, "K1ABC"))
+	items := next(t, q)
+	apply(t, q, Outcome{ID: items[0].ID, Status: Retry, Code: "unknown_station"}, Outcome{ID: items[1].ID, Status: Retry, Code: "busy"})
+
+	if err := q.RetryWaitingForStation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ready := next(t, q)
+	if len(ready) != 1 || ready[0].ID != items[0].ID {
+		t.Errorf("ready = %+v", ready)
 	}
 }

@@ -6,6 +6,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -14,14 +15,14 @@ func TestANewInstallHasEmptySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (Settings{}) {
+	if !reflect.DeepEqual(got, Settings{}) {
 		t.Errorf("got %+v", got)
 	}
 }
 
 func TestSettingsSurviveSaving(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{ServerURL: "https://logs.example.org", PinSHA256: "abc", RelayName: "Tent", LoggerAddress: "192.168.1.5:1000"}
+	want := Settings{ServerURL: "https://logs.example.org", PinSHA256: "abc", RelayName: "Tent", LoggerAddress: "192.168.1.5:1000", LogFiles: []string{`C:\Logs\wsjtx_log.adi`}}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestSettingsSurviveSaving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v", got)
 	}
 
