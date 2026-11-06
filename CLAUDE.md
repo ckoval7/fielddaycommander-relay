@@ -40,7 +40,7 @@ The UI is a small settings and status page served on localhost, plus a tray icon
 - **Other loggers:** the app's listeners in `app/Console/Commands/*ListenCommand.php` show how it handles WSJT-X/JTDX, fldigi and ADIF-over-UDP.
 - **N1MM peer network (12070), if ever joined:** never send `FUNCTIONKEY` (keys another PC's radio), `TIME` (sets its clock) or `FILE` (overwrites its data files).
 
-Implement protocols from their wire format. Never commit third-party or decompiled source, or anything bundled from another vendor, including logos and forms.
+Implement protocols from their wire format. Never commit third-party source or anything bundled from another vendor, including logos and forms.
 
 ## Server contract
 
