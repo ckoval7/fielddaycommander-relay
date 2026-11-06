@@ -12,6 +12,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +209,60 @@ func TestAnUntrustedServerCanBePinnedAfterAPersonAccepts(t *testing.T) {
 
 	if _, err := FetchPin(context.Background(), "http://localhost:1"); err == nil {
 		t.Error("plain http has no key to pin")
+	}
+}
+
+func TestContactChangesReadsAPageAndSendsTheCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/relay/v1/contacts" || r.URL.Query().Get("cursor") != "abc+/" || r.URL.Query().Get("limit") != "50" {
+			t.Errorf("%s %s", r.Method, r.URL)
+		}
+		_, _ = w.Write([]byte(`{"contacts":[{"uuid":"u1","deleted":false,"updated_at":"2026-06-27T18:05:00Z","idempotency_key":null,"callsign":"W1AW","qso_time":"2026-06-27T18:05:00Z","band":"20m","mode":"PH","frequency_hz":null,"notes":null},{"uuid":"u2","deleted":true,"updated_at":"2026-06-27T18:06:00Z","idempotency_key":"key"}],"next_cursor":"next","has_more":true}`))
+	}))
+	defer server.Close()
+
+	client, _ := New(Config{ServerURL: server.URL})
+	page, err := client.ContactChanges(context.Background(), "abc+/", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.NextCursor != "next" || !page.HasMore || len(page.Contacts) != 2 {
+		t.Fatalf("page = %+v", page)
+	}
+	if got := page.Contacts[0]; got.Callsign != "W1AW" || got.IdempotencyKey != "" || got.FrequencyHz != 0 || got.Deleted {
+		t.Errorf("live = %+v", got)
+	}
+	if got := page.Contacts[1]; !got.Deleted || got.IdempotencyKey != "key" {
+		t.Errorf("deleted = %+v", got)
+	}
+}
+
+// The feed's fields are what the server promises, so the struct is checked against
+// the pinned contract.
+func TestContactChangeMatchesThePinnedContract(t *testing.T) {
+	raw, err := os.ReadFile("../../api/relay-v1.openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(raw)
+	start := strings.Index(spec, "\n    ContactChange:\n")
+	end := strings.Index(spec, "\n    ContactResult:\n")
+	if start < 0 || end < start {
+		t.Fatal("ContactChange schema not found")
+	}
+
+	var want []string
+	for _, match := range regexp.MustCompile(`(?m)^        ([a-z_]+):`).FindAllStringSubmatch(spec[start:end], -1) {
+		want = append(want, match[1])
+	}
+	var got []string
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[ContactChange]()) {
+		got = append(got, field.Tag.Get("json"))
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Errorf("contract fields %v\nstruct fields %v", want, got)
 	}
 }
 

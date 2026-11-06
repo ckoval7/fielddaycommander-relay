@@ -163,7 +163,7 @@ func TestMatchesThePinnedContract(t *testing.T) {
 	}
 	spec := string(raw)
 	start := strings.Index(spec, "\n    Contact:\n")
-	end := strings.Index(spec, "\n    ContactResult:\n")
+	end := strings.Index(spec, "\n    ContactChange:\n")
 	if start < 0 || end < start {
 		t.Fatal("Contact schema not found")
 	}

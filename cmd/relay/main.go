@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ const (
 	// assets/relay.ico.
 	iconResource  = 1
 	logFile       = "relay.log"
+	crashFile     = "crash.log"
 	maxLogBytes   = 5 << 20
 	preferredPort = 17311
 )
@@ -65,6 +67,9 @@ func run() error {
 		return err
 	}
 	defer closeLog()
+	if err := captureCrashes(dataDir); err != nil {
+		log.Warn("couldn't set up the crash log", "error", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -159,6 +164,18 @@ func openLog(dir string) (*slog.Logger, func(), error) {
 	}
 	var out io.Writer = file
 	return slog.New(slog.NewTextHandler(out, nil)), func() { _ = file.Close() }, nil
+}
+
+// captureCrashes sends a crash's details to a file. A panic normally prints to the
+// console, and the Windows build doesn't have one, so it would vanish. Earlier
+// crashes stay in the file, since nobody may look until after the event.
+func captureCrashes(dir string) error {
+	file, err := os.OpenFile(filepath.Join(dir, crashFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return debug.SetCrashOutput(file, debug.CrashOptions{})
 }
 
 var errAlreadyRunning = errors.New("the relay is already running")

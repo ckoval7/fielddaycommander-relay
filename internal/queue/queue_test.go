@@ -323,3 +323,116 @@ func TestPutRefusesAContactWithoutAKey(t *testing.T) {
 		t.Error("expected an error")
 	}
 }
+
+func TestAnswersFillInTheMirrorAndLaterUploadsNameTheUUID(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	original := normalized(t, "W1AW")
+	put(t, q, original)
+	apply(t, q, Outcome{ID: next(t, q)[0].ID, Status: Accepted, ContactUUID: "uuid-1"})
+
+	row, err := q.FindMirror(ctx, "uuid-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || row.Key != original.IdempotencyKey || row.Baseline != nil || row.Deleted {
+		t.Fatalf("row = %+v", row)
+	}
+
+	edit := normalized(t, "K1ABC")
+	edit.ReplacesKey = original.IdempotencyKey
+	put(t, q, edit)
+	item := next(t, q)[0]
+	if item.Contact.UUID != "uuid-1" {
+		t.Errorf("the edit should name the contact: %+v", item.Contact)
+	}
+
+	apply(t, q, Outcome{ID: item.ID, Status: Accepted, ContactUUID: "uuid-1"})
+	if row, _ = q.FindMirror(ctx, "", edit.IdempotencyKey); row == nil || row.UUID != "uuid-1" {
+		t.Errorf("row after the edit = %+v", row)
+	}
+
+	gone := edit
+	gone.ReplacesKey = ""
+	gone.Deleted = true
+	put(t, q, gone)
+	item = next(t, q)[0]
+	if item.Contact.UUID != "uuid-1" {
+		t.Errorf("the delete should name the contact: %+v", item.Contact)
+	}
+	apply(t, q, Outcome{ID: item.ID, Status: Accepted})
+	if row, _ = q.FindMirror(ctx, "uuid-1"); row == nil || !row.Deleted {
+		t.Errorf("row after the delete = %+v", row)
+	}
+}
+
+func TestAUUIDDoesNotMakeAContactLookChanged(t *testing.T) {
+	q := open(t)
+	c := normalized(t, "W1AW")
+	put(t, q, c)
+	c.UUID = "uuid-1"
+	if put(t, q, c) {
+		t.Error("the same values with a uuid were queued again")
+	}
+}
+
+func TestRememberKeepsAnEchoFromBeingSent(t *testing.T) {
+	q := open(t)
+	c := normalized(t, "W1AW")
+	if err := q.Remember(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	if put(t, q, c) {
+		t.Error("the relay's own write came back and was queued")
+	}
+	c.Section = "CT"
+	if !put(t, q, c) {
+		t.Error("a real change should still be queued")
+	}
+}
+
+func TestHasPendingCoversBothKeys(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	edit := normalized(t, "K1ABC")
+	edit.ReplacesKey = "old-key-0000000000"
+	put(t, q, edit)
+
+	for key, want := range map[string]bool{edit.IdempotencyKey: true, "old-key-0000000000": true, "other": false, "": false} {
+		if got, err := q.HasPending(ctx, key); err != nil || got != want {
+			t.Errorf("%q: %v, %v", key, got, err)
+		}
+	}
+	apply(t, q, Outcome{ID: next(t, q)[0].ID, Status: Rejected})
+	if got, _ := q.HasPending(ctx, edit.IdempotencyKey); got {
+		t.Error("an answered upload isn't pending")
+	}
+}
+
+func TestResetSyncKeepsContactsAndForgetsTheServer(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	c := normalized(t, "W1AW")
+	put(t, q, c)
+	apply(t, q, Outcome{ID: next(t, q)[0].ID, Status: Accepted, ContactUUID: "uuid-1"})
+	if err := q.SetMeta(ctx, "feed_cursor", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Defer(ctx, "uuid-2", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := q.ResetSync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := q.FindMirror(ctx, "uuid-1")
+	cursor, _ := q.Meta(ctx, "feed_cursor")
+	held, _ := q.Deferred(ctx)
+	counts, _ := q.Counts(ctx)
+	if row != nil || cursor != "" || len(held) != 0 || counts.Accepted != 1 {
+		t.Errorf("row %+v, cursor %q, held %v, counts %+v", row, cursor, held, counts)
+	}
+	if put(t, q, c) {
+		t.Error("the upload history should survive")
+	}
+}

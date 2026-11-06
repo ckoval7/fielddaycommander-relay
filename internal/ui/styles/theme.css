@@ -1,0 +1,124 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Generated from Field Day Commander's resources/css/app.css by
+ * scripts/sync-theme.cjs. Change the colors there, not here.
+ */
+
+@plugin "daisyui/theme" {
+    name: "light";
+    default: true;
+    color-scheme: light;
+    --color-base-100: oklch(100% 0 0);
+    --color-base-200: oklch(98% 0 0);
+    --color-base-300: oklch(95% 0 0);
+    --color-base-content: oklch(21% 0.006 285.885);
+    --color-primary: hsl(223, 71%, 40%);
+    --color-primary-strong: hsl(223, 71%, 40%);
+    --color-primary-strong-content: oklch(100% 0 0);
+    --color-primary-content: oklch(100% 0 0);
+    --color-secondary: oklch(44.6% 0.043 257.281);
+    --color-secondary-strong: oklch(44.6% 0.043 257.281);
+    --color-secondary-strong-content: oklch(100% 0 0);
+    --color-secondary-content: oklch(100% 0 0);
+    --color-accent: oklch(55.5% 0.163 48.998);
+    --color-accent-strong: oklch(55.5% 0.163 48.998);
+    --color-accent-strong-content: oklch(100% 0 0);
+    --color-accent-content: oklch(100% 0 0);
+    --color-neutral: oklch(37.2% 0.044 257.287);
+    --color-neutral-strong: oklch(37.2% 0.044 257.287);
+    --color-neutral-strong-content: oklch(100% 0 0);
+    --color-neutral-content: oklch(100% 0 0);
+    --color-info: oklch(50% 0.134 242.749);
+    --color-info-strong: oklch(50% 0.134 242.749);
+    --color-info-strong-content: oklch(100% 0 0);
+    --color-info-content: oklch(100% 0 0);
+    --color-success: oklch(50% 0.15 150.069);
+    --color-success-strong: oklch(50% 0.15 150.069);
+    --color-success-strong-content: oklch(100% 0 0);
+    --color-success-content: oklch(100% 0 0);
+    --color-warning: oklch(55.5% 0.163 48.998);
+    --color-warning-strong: oklch(82.8% 0.189 84.429);
+    --color-warning-strong-content: oklch(27.9% 0.077 45.635);
+    --color-warning-content: oklch(100% 0 0);
+    --color-error: oklch(50.5% 0.213 27.518);
+    --color-error-strong: oklch(50.5% 0.213 27.518);
+    --color-error-strong-content: oklch(100% 0 0);
+    --color-error-content: oklch(100% 0 0);
+}
+
+@plugin "daisyui/theme" {
+    name: "dark";
+    prefersdark: true;
+    color-scheme: dark;
+    --color-base-100: oklch(25.33% 0.016 252.42);
+    --color-base-200: oklch(23.26% 0.014 253.1);
+    --color-base-300: oklch(21.15% 0.012 254.09);
+    --color-base-content: oklch(97.807% 0.029 256.847);
+    --color-primary: oklch(70.7% 0.165 254.624);
+    --color-primary-strong: oklch(54.6% 0.245 262.881);
+    --color-primary-strong-content: oklch(100% 0 0);
+    --color-primary-content: oklch(12.9% 0.042 264.695);
+    --color-secondary: oklch(70.4% 0.04 256.788);
+    --color-secondary-strong: oklch(55.4% 0.046 257.417);
+    --color-secondary-strong-content: oklch(100% 0 0);
+    --color-secondary-content: oklch(12.9% 0.042 264.695);
+    --color-accent: oklch(82.8% 0.189 84.429);
+    --color-accent-strong: oklch(55.5% 0.163 48.998);
+    --color-accent-strong-content: oklch(100% 0 0);
+    --color-accent-content: oklch(12.9% 0.042 264.695);
+    --color-neutral: oklch(70.4% 0.04 256.788);
+    --color-neutral-strong: oklch(44.6% 0.043 257.281);
+    --color-neutral-strong-content: oklch(100% 0 0);
+    --color-neutral-content: oklch(12.9% 0.042 264.695);
+    --color-info: oklch(74.6% 0.16 232.661);
+    --color-info-strong: oklch(50% 0.134 242.749);
+    --color-info-strong-content: oklch(100% 0 0);
+    --color-info-content: oklch(12.9% 0.042 264.695);
+    --color-success: oklch(79.2% 0.209 151.711);
+    --color-success-strong: oklch(52.7% 0.154 150.069);
+    --color-success-strong-content: oklch(100% 0 0);
+    --color-success-content: oklch(12.9% 0.042 264.695);
+    --color-warning: oklch(82.8% 0.189 84.429);
+    --color-warning-strong: oklch(82.8% 0.189 84.429);
+    --color-warning-strong-content: oklch(27.9% 0.077 45.635);
+    --color-warning-content: oklch(12.9% 0.042 264.695);
+    --color-error: oklch(70.4% 0.191 22.216);
+    --color-error-strong: oklch(44.4% 0.177 26.899);
+    --color-error-strong-content: oklch(100% 0 0);
+    --color-error-content: oklch(12.9% 0.042 264.695);
+}
+
+/* Solid fills: route each semantic colour's solid button, badge, alert and
+ * checkbox to its -strong shade and -strong-content text. Soft, outline, dash, ghost
+ * and link variants use the colour as text, so they keep --color-X. */
+:is(.btn, .badge, .alert, .checkbox):is(.btn-primary, .badge-primary, .alert-primary, .checkbox-primary) { --semantic-fill: var(--color-primary-strong); --semantic-fill-content: var(--color-primary-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-secondary, .badge-secondary, .alert-secondary, .checkbox-secondary) { --semantic-fill: var(--color-secondary-strong); --semantic-fill-content: var(--color-secondary-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-accent, .badge-accent, .alert-accent, .checkbox-accent) { --semantic-fill: var(--color-accent-strong); --semantic-fill-content: var(--color-accent-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-neutral, .badge-neutral, .alert-neutral, .checkbox-neutral) { --semantic-fill: var(--color-neutral-strong); --semantic-fill-content: var(--color-neutral-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-info, .badge-info, .alert-info, .checkbox-info) { --semantic-fill: var(--color-info-strong); --semantic-fill-content: var(--color-info-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-success, .badge-success, .alert-success, .checkbox-success) { --semantic-fill: var(--color-success-strong); --semantic-fill-content: var(--color-success-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-warning, .badge-warning, .alert-warning, .checkbox-warning) { --semantic-fill: var(--color-warning-strong); --semantic-fill-content: var(--color-warning-strong-content); }
+:is(.btn, .badge, .alert, .checkbox):is(.btn-error, .badge-error, .alert-error, .checkbox-error) { --semantic-fill: var(--color-error-strong); --semantic-fill-content: var(--color-error-strong-content); }
+
+.btn:is(.btn-primary, .btn-secondary, .btn-accent, .btn-neutral, .btn-info, .btn-success, .btn-warning, .btn-error):not(.btn-soft, .btn-outline, .btn-dash, .btn-ghost, .btn-link) {
+    --btn-color: var(--semantic-fill);
+    --btn-fg: var(--semantic-fill-content);
+}
+
+.badge:is(.badge-primary, .badge-secondary, .badge-accent, .badge-neutral, .badge-info, .badge-success, .badge-warning, .badge-error):not(.badge-soft, .badge-outline, .badge-dash, .badge-ghost) {
+    --badge-color: var(--semantic-fill);
+    --badge-fg: var(--semantic-fill-content);
+}
+
+.alert:is(.alert-primary, .alert-secondary, .alert-accent, .alert-neutral, .alert-info, .alert-success, .alert-warning, .alert-error):not(.alert-soft, .alert-outline, .alert-dash) {
+    --alert-color: var(--semantic-fill);
+    --alert-border-color: var(--semantic-fill);
+    color: var(--semantic-fill-content);
+}
+
+.checkbox:is(.checkbox-primary, .checkbox-secondary, .checkbox-accent, .checkbox-neutral, .checkbox-info, .checkbox-success, .checkbox-warning, .checkbox-error) {
+    --input-color: var(--semantic-fill);
+    color: var(--semantic-fill-content);
+}

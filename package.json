@@ -1,0 +1,15 @@
+{
+  "name": "fielddaycommander-relay-styles",
+  "private": true,
+  "description": "Builds the status page's stylesheet. Nothing here ships except the compiled CSS.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "build:css": "node scripts/build-css.cjs"
+  },
+  "devDependencies": {
+    "@tailwindcss/node": "4.3.4",
+    "@tailwindcss/oxide": "4.3.4",
+    "daisyui": "5.7.50",
+    "tailwindcss": "4.3.4"
+  }
+}

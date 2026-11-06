@@ -22,10 +22,11 @@ import (
 
 // fakeSink records what the source stores.
 type fakeSink struct {
-	mu       sync.Mutex
-	contacts []contact.Contact
-	invalid  []string
-	fail     error
+	mu         sync.Mutex
+	contacts   []contact.Contact
+	invalid    []string
+	fail       error
+	remembered []contact.Contact
 }
 
 func (f *fakeSink) Put(_ context.Context, c contact.Contact) (bool, error) {
@@ -42,6 +43,13 @@ func (f *fakeSink) PutInvalid(_ context.Context, _, reason, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.invalid = append(f.invalid, reason)
+	return nil
+}
+
+func (f *fakeSink) Remember(_ context.Context, c contact.Contact) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remembered = append(f.remembered, c)
 	return nil
 }
 

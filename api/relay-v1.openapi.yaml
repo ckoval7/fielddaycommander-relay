@@ -4,7 +4,7 @@
 openapi: 3.1.0
 info:
   title: Field Day Commander Relay API
-  version: 1.0.0
+  version: 1.2.0
   description: >-
     How Field Day Commander Relay talks to a Field Day Commander server. The relay
     depends on v1, so only add to it. A breaking change needs a v2.
@@ -77,6 +77,16 @@ components:
             it. Send it after the contact it deletes. Sending it again is safe.
             Without a contact to delete, the key is remembered for ten minutes
             in case the contact arrives late.
+        uuid:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The contact this upload changes, from the contact feed or an earlier
+            accepted result. It reaches contacts logged elsewhere, which have no
+            idempotency key, and gives them this one unless another contact
+            holds it. It takes priority over replaces_key. If no contact has
+            this uuid, it's ignored. A contact deleted on the server stays
+            deleted. Only sent when capabilities.upload_uuid is true.
         callsign: { type: string, maxLength: 20, pattern: '^[A-Za-z0-9/]+$' }
         qso_time:
           type: string
@@ -105,6 +115,44 @@ components:
         grid_square: { type: [string, 'null'], maxLength: 6, pattern: '^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$' }
         contact_name: { type: [string, 'null'], maxLength: 50 }
         notes: { type: [string, 'null'], maxLength: 500 }
+    ContactChange:
+      type: object
+      required: [uuid, deleted, updated_at]
+      description: >-
+        The contact as it is now, with field names and formats from the upload
+        schema. A deleted contact has only uuid, deleted and updated_at, plus
+        idempotency_key when it has one. Live contacts have every field, null
+        when empty. Values aren't limited by the upload schema's patterns or
+        lengths, because contacts can come from other logging paths.
+      properties:
+        uuid: { type: string, format: uuid, description: Identifies the contact for as long as it exists. }
+        deleted: { type: boolean }
+        updated_at: { type: string, format: date-time, description: 'UTC, to the second.' }
+        idempotency_key:
+          type: [string, 'null']
+          description: >-
+            The key the contact was uploaded under, for contacts stored from
+            relay uploads, or null for all others. Use it to recognize contacts
+            this relay sent. It changes with replaces_key. The requesting
+            relay's own contacts are included, because the server can change
+            them, so compare their fields rather than skipping them.
+        callsign: { type: string }
+        qso_time: { type: [string, 'null'], format: date-time, description: 'UTC, to the second: 2026-06-27T18:05:00Z' }
+        band: { type: [string, 'null'] }
+        mode:
+          type: [string, 'null']
+          description: The logged mode, such as SSB or FT8, or CW, PH or DIG for a contact logged by group only.
+        frequency_hz: { type: [integer, 'null'] }
+        operator: { type: [string, 'null'] }
+        station: { type: [string, 'null'], description: 'The station name, even if the contact was uploaded with its hostname.' }
+        exchange_class: { type: [string, 'null'] }
+        section: { type: [string, 'null'] }
+        power_watts: { type: [integer, 'null'] }
+        rst_sent: { type: [string, 'null'] }
+        rst_received: { type: [string, 'null'] }
+        grid_square: { type: [string, 'null'] }
+        contact_name: { type: [string, 'null'] }
+        notes: { type: [string, 'null'] }
     ContactResult:
       type: object
       required: [index, status]
@@ -181,6 +229,15 @@ paths:
                       name: { type: string }
                       starts_at: { type: string, format: date-time }
                       ends_at: { type: string, format: date-time, description: When operating ends. }
+                  capabilities:
+                    type: object
+                    description: >-
+                      Features added to v1 since its first release. Missing on
+                      servers that predate them, so treat a missing capability
+                      or a missing capabilities object as false.
+                    properties:
+                      contact_feed: { type: boolean, description: 'GET /contacts is available.' }
+                      upload_uuid: { type: boolean, description: 'Uploads can name a contact by uuid.' }
                   permissions:
                     type: object
                     required: [create_stations]
@@ -204,6 +261,79 @@ paths:
         '403': { $ref: '#/components/responses/httpsRequired' }
         '429': { $ref: '#/components/responses/tooManyRequests' }
   /contacts:
+    get:
+      summary: Read the changes to the event's contacts
+      description: >-
+        Returns live and deleted contacts of the token's event, oldest change
+        first, each as it is now. Without a cursor it starts from the beginning,
+        which is a relay's first full copy.
+
+
+        Paging: store next_cursor after applying a page and send it on the next
+        request. While has_more is true, ask again straight away. When it is
+        false, the relay has caught up, so wait before polling again. Polling
+        every 2 to 5 seconds is enough. This shares the limit of 120 requests a
+        minute per relay with the other endpoints.
+
+
+        Delivery is at-least-once, so expect repeats. A change can commit after
+        its timestamp, so contacts changed in the last 60 seconds are sent again
+        on each poll until they are older than that, and a change whose commit
+        took longer than 60 seconds can be missed. An edit also repeats a
+        contact, and so does rescoring, which changes updated_at and nothing in
+        these fields. Compare fields with what the relay holds and only write to
+        N3FJP when they differ. If a contact appears twice in a run, the later
+        entry is the one to keep. A repeat never shows an older state.
+
+
+        Deletes: a deleted contact is included everywhere, including the first
+        copy. A relay that starts over with contacts already in its log needs
+        those entries to remove what was deleted while it was away. Ignore a
+        deleted entry for a uuid or idempotency_key it doesn't hold. A deleted
+        contact can come back as a live entry with the same uuid if someone
+        restores it.
+
+
+        Not changes: renaming a station or changing a user's callsign doesn't
+        repeat their contacts. The new name appears the next time each contact
+        changes or on a new full copy. Contacts that are permanently removed
+        aren't reported. That only happens with developer tools.
+      security: [{ relayToken: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/relayVersion' }
+        - name: cursor
+          in: query
+          description: The next_cursor of an earlier response. Opaque, so don't parse or build one.
+          schema: { type: string, maxLength: 255 }
+        - name: limit
+          in: query
+          description: Most contacts to return.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: A page of changes. An empty page with has_more false means nothing has changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contacts, next_cursor, has_more]
+                properties:
+                  contacts: { type: array, items: { $ref: '#/components/schemas/ContactChange' } }
+                  next_cursor:
+                    type: string
+                    description: >-
+                      Always present. It can point earlier than the page just
+                      returned, which is how contacts get repeated. Cursors stay
+                      valid across server restarts and upgrades within v1.
+                  has_more: { type: boolean }
+        '401': { $ref: '#/components/responses/unauthenticated' }
+        '403': { $ref: '#/components/responses/httpsRequired' }
+        '422':
+          description: The limit is out of range, or the cursor isn't valid (code invalid_cursor). After invalid_cursor, start again without a cursor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/tooManyRequests' }
     post:
       summary: Store a batch of contacts
       description: >-

@@ -59,6 +59,38 @@ CREATE TABLE IF NOT EXISTS known (
 	payload_hash    TEXT NOT NULL
 ) WITHOUT ROWID;
 
+-- The server's view of each contact, from the feed and from answers to uploads.
+-- An empty payload means the next feed entry sets the baseline, since the relay's
+-- own upload is what changed it.
+CREATE TABLE IF NOT EXISTS mirror (
+	uuid            TEXT PRIMARY KEY,
+	idempotency_key TEXT NOT NULL DEFAULT '',
+	derived_key     TEXT NOT NULL DEFAULT '',
+	payload         TEXT NOT NULL DEFAULT '',
+	deleted         INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS mirror_key ON mirror (idempotency_key);
+CREATE INDEX IF NOT EXISTS mirror_derived ON mirror (derived_key);
+
+-- Server changes waiting for a contact's unanswered upload.
+CREATE TABLE IF NOT EXISTS deferred (
+	uuid    TEXT PRIMARY KEY,
+	payload TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- The log the relay keeps while it acts as the N3FJP network server. N3FJP clients
+-- keep none of their own, so numbers and whole records have to survive a restart.
+CREATE TABLE IF NOT EXISTS logger_records (
+	number          INTEGER PRIMARY KEY,
+	idempotency_key TEXT NOT NULL DEFAULT '',
+	fields          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+	name  TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+) WITHOUT ROWID;
+
 -- Records from a logger that can't be made into a contact, kept for a person
 -- to look at.
 CREATE TABLE IF NOT EXISTS invalid (
@@ -164,10 +196,6 @@ func (q *Queue) Put(ctx context.Context, c contact.Contact) (bool, error) {
 		c.ReplacesKey = ""
 	}
 
-	payload, err := json.Marshal(c)
-	if err != nil {
-		return false, fmt.Errorf("encode contact: %w", err)
-	}
 	hash, err := valueHash(c)
 	if err != nil {
 		return false, err
@@ -175,8 +203,22 @@ func (q *Queue) Put(ctx context.Context, c contact.Contact) (bool, error) {
 
 	queued := false
 	err = q.inTx(ctx, func(tx *sql.Tx) error {
+		// Name the contact by uuid when the server has given one, which also
+		// reaches contacts logged elsewhere that have no idempotency key.
+		if c.UUID == "" {
+			if err := tx.QueryRowContext(ctx,
+				`SELECT uuid FROM mirror WHERE idempotency_key IN (?1, ?2) OR derived_key IN (?1, ?2) LIMIT 1`,
+				c.IdempotencyKey, c.ReplacesKey).Scan(&c.UUID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		payload, err := json.Marshal(c)
+		if err != nil {
+			return fmt.Errorf("encode contact: %w", err)
+		}
+
 		var known string
-		err := tx.QueryRowContext(ctx, `SELECT payload_hash FROM known WHERE idempotency_key = ?`, c.IdempotencyKey).Scan(&known)
+		err = tx.QueryRowContext(ctx, `SELECT payload_hash FROM known WHERE idempotency_key = ?`, c.IdempotencyKey).Scan(&known)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -297,6 +339,9 @@ func (q *Queue) Apply(ctx context.Context, outcomes []Outcome) error {
 				_, err = tx.ExecContext(ctx,
 					`UPDATE outbox SET state = ?, contact_uuid = ?, code = '', message = '', attempts = attempts + 1 WHERE id = ?`,
 					stateAccepted, o.ContactUUID, o.ID)
+				if err == nil {
+					err = recordAccepted(ctx, tx, o)
+				}
 			case Rejected:
 				_, err = tx.ExecContext(ctx,
 					`UPDATE outbox SET state = ?, code = ?, message = ?, attempts = attempts + 1 WHERE id = ?`,
@@ -426,6 +471,7 @@ func (q *Queue) inTx(ctx context.Context, work func(*sql.Tx) error) error {
 // here rather than what it is, so it stays out.
 func valueHash(c contact.Contact) (string, error) {
 	c.ReplacesKey = ""
+	c.UUID = ""
 	encoded, err := json.Marshal(c)
 	if err != nil {
 		return "", fmt.Errorf("encode contact: %w", err)

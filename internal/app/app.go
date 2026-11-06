@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
+	"github.com/ckoval7/fielddaycommander-relay/internal/feed"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n3fjp"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
@@ -66,6 +67,15 @@ func (e *EnrollError) Error() string {
 
 func (e *EnrollError) Unwrap() error { return e.Err }
 
+// The relay's roles on an N3FJP network.
+const (
+	RoleClient = "client"
+	RoleServer = "server"
+)
+
+// ErrBadRole means a role isn't one of the two.
+var ErrBadRole = errors.New("unknown logger role")
+
 // ErrBadLoggerAddress means a logger address isn't a host and port.
 var ErrBadLoggerAddress = errors.New("logger address must be a host and port")
 
@@ -87,8 +97,13 @@ type Status struct {
 	LoggerAddress string
 	Sender        sender.Status
 	Source        n3fjp.Status
-	Counts        queue.Counts
-	Attention     []queue.Attention
+	// ServerRole is whether N3FJP PCs connect to the relay.
+	ServerRole      bool
+	ListenOnNetwork bool
+	N3FJPServer     n3fjp.ServerStatus
+	Feed            feed.Status
+	Counts          queue.Counts
+	Attention       []queue.Attention
 }
 
 // Config is what New needs.
@@ -112,6 +127,8 @@ type App struct {
 	running  sync.WaitGroup
 	sender   *sender.Sender
 	source   *n3fjp.Source
+	server   *n3fjp.Server
+	feed     *feed.Syncer
 }
 
 // New opens the relay's data. Call Run to start it.
@@ -161,47 +178,74 @@ func (a *App) restartLocked() {
 	ctx, cancel := context.WithCancel(a.base)
 	a.cancel = cancel
 
-	a.sender = a.buildSender()
+	var client *api.Client
+	a.sender, client = a.buildSender()
 	a.enrolled = a.sender != nil
 
 	var notify func()
 	if a.sender != nil {
 		notify = a.sender.Wake
-		a.running.Go(func() { a.sender.Run(ctx) })
+		running := a.sender
+		a.running.Go(func() { running.Run(ctx) })
 	}
 
-	address := a.current.LoggerAddress
-	if address == "" {
-		address = n3fjp.DefaultAddress
+	var writer feed.Writer
+	a.source, a.server = nil, nil
+	if a.current.LoggerRole == RoleServer {
+		a.server = n3fjp.NewServer(a.listenAddress(), a.queue, a.queue, notify, a.cfg.Log)
+		writer = a.server
+		running := a.server
+		a.running.Go(func() { running.Run(ctx) })
+	} else {
+		address := a.current.LoggerAddress
+		if address == "" {
+			address = n3fjp.DefaultAddress
+		}
+		a.source = n3fjp.NewSource(address, a.queue, notify, a.cfg.Log)
+		writer = a.source
+		running := a.source
+		a.running.Go(func() { running.Run(ctx) })
 	}
-	a.source = n3fjp.NewSource(address, a.queue, notify, a.cfg.Log)
-	a.running.Go(func() { a.source.Run(ctx) })
+
+	a.feed = nil
+	if client != nil {
+		a.feed = feed.New(a.queue, client, writer, a.cfg.Log)
+		running := a.feed
+		a.running.Go(func() { running.Run(ctx) })
+	}
 }
 
-// buildSender returns a sender, or nil when the relay isn't enrolled or can't
-// read its token. The token stays out of the app's own state.
-func (a *App) buildSender() *sender.Sender {
+func (a *App) listenAddress() string {
+	if a.current.ListenOnNetwork {
+		return n3fjp.NetworkListenAddress
+	}
+	return n3fjp.LocalListenAddress
+}
+
+// buildSender returns a sender and its client, or nil when the relay isn't
+// enrolled or can't read its token. The token stays out of the app's own state.
+func (a *App) buildSender() (*sender.Sender, *api.Client) {
 	if a.current.ServerURL == "" {
-		return nil
+		return nil, nil
 	}
 	token, err := a.cfg.Store.Get()
 	if err != nil {
 		if !errors.Is(err, secret.ErrNotFound) {
 			a.cfg.Log.Error("reading the token failed", "error", err)
 		}
-		return nil
+		return nil, nil
 	}
 	pin, err := hex.DecodeString(a.current.PinSHA256)
 	if err != nil {
 		a.cfg.Log.Error("saved server pin is damaged", "error", err)
-		return nil
+		return nil, nil
 	}
 	client, err := api.New(api.Config{ServerURL: a.current.ServerURL, Token: api.Token(token), Version: a.cfg.Version, PinSHA256: pin})
 	if err != nil {
 		a.cfg.Log.Error("saved server address is unusable", "error", err)
-		return nil
+		return nil, nil
 	}
-	return sender.New(a.queue, client, a.cfg.Version, a.cfg.Log)
+	return sender.New(a.queue, client, a.cfg.Version, a.cfg.Log), client
 }
 
 // Enroll trades a one-time code for a token, stores it and starts sending.
@@ -238,6 +282,11 @@ func (a *App) Enroll(ctx context.Context, request EnrollRequest) error {
 	next.PinSHA256 = hex.EncodeToString(pin)
 	next.RelayName = enrolled.Relay.Name
 	if err := settings.Save(a.cfg.DataDir, next); err != nil {
+		return &EnrollError{Failure: FailSave, Err: err}
+	}
+	// A new enrollment can mean another server or event, so the feed starts over.
+	// Contacts the logger already has are recognized by their keys.
+	if err := a.queue.ResetSync(ctx); err != nil {
 		return &EnrollError{Failure: FailSave, Err: err}
 	}
 	a.current = next
@@ -287,7 +336,7 @@ func (a *App) enrollFailure(ctx context.Context, serverURL string, err error) er
 
 // Forget removes the token and server. Queued contacts stay, and go out if the
 // relay enrolls again.
-func (a *App) Forget(context.Context) error {
+func (a *App) Forget(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -301,14 +350,21 @@ func (a *App) Forget(context.Context) error {
 	if err := a.cfg.Store.Delete(); err != nil {
 		return err
 	}
+	if err := a.queue.ResetSync(ctx); err != nil {
+		return err
+	}
 	a.current = next
 	a.restartLocked()
 	return nil
 }
 
-// SetLoggerAddress changes where the relay looks for N3FJP. Empty means this
-// computer. A port is optional.
-func (a *App) SetLoggerAddress(address string) error {
+// SetLogger saves how the relay joins N3FJP: as a client of the address, where
+// empty means this computer and a port is optional, or as the N3FJP server.
+// Saving what's already set changes nothing, so it doesn't drop any connections.
+func (a *App) SetLogger(role, address string, listenOnNetwork bool) error {
+	if role != RoleServer && role != RoleClient {
+		return ErrBadRole
+	}
 	normalized, err := normalizeLoggerAddress(address)
 	if err != nil {
 		return err
@@ -318,8 +374,25 @@ func (a *App) SetLoggerAddress(address string) error {
 	defer a.mu.Unlock()
 	next := a.current
 	next.LoggerAddress = normalized
+	next.LoggerRole = ""
+	next.ListenOnNetwork = false
+	if role == RoleServer {
+		next.LoggerRole = RoleServer
+		next.ListenOnNetwork = listenOnNetwork
+	}
+	if next == a.current {
+		return nil
+	}
+
 	if err := settings.Save(a.cfg.DataDir, next); err != nil {
 		return err
+	}
+	// A different role means a different log. Starting the feed over fills it, and
+	// contacts it already holds are recognized by their keys.
+	if next.LoggerRole != a.current.LoggerRole {
+		if err := a.queue.ResetSync(context.Background()); err != nil {
+			return err
+		}
 	}
 	a.current = next
 	a.restartLocked()
@@ -343,8 +416,16 @@ func (a *App) Status(ctx context.Context) (Status, error) {
 	if a.sender != nil {
 		status.Sender = a.sender.Status()
 	}
+	status.ServerRole = a.current.LoggerRole == RoleServer
+	status.ListenOnNetwork = a.current.ListenOnNetwork
 	if a.source != nil {
 		status.Source = a.source.Status()
+	}
+	if a.server != nil {
+		status.N3FJPServer = a.server.Status()
+	}
+	if a.feed != nil {
+		status.Feed = a.feed.Status()
 	}
 	a.mu.RUnlock()
 

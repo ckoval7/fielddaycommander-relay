@@ -21,6 +21,12 @@ path = [
 SPDX-FileCopyrightText = "2026 Corey Koval <ckoval7@gmail.com>"
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
 
+# The compiled stylesheet includes Tailwind CSS and daisyUI.
+[[annotations]]
+path = ["internal/ui/web/assets/app.css"]
+SPDX-FileCopyrightText = ["Tailwind Labs, Inc.", "Pouya Saadeghi", "2026 Corey Koval <ckoval7@gmail.com>"]
+SPDX-License-Identifier = "GPL-3.0-or-later AND MIT"
+
 # Project metadata and tooling notes.
 [[annotations]]
 path = [
@@ -28,6 +34,7 @@ path = [
     "VERSION",
     "go.mod",
     "go.sum",
+    "package.json",
     ".editorconfig",
     ".gitattributes",
     ".gitignore",

@@ -6,13 +6,13 @@ The server app is a separate repo, checked out at `/home/corey/fielddaycommander
 
 ## Status
 
-The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). `app`, `ui`, `secret`, `settings`, `tray` and `cmd/relay` make it a program. There's no installer or start-at-login yet, and the Windows keychain and tray have only been compiled here, because this environment can't run Windows binaries. Keychain support exists only on Windows, so other builds can't enroll. The server's API is in the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
+The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). `app`, `ui`, `secret`, `settings`, `tray` and `cmd/relay` make it a program, and `feed` brings server changes back for two-way sync. There's no installer or start-at-login yet, and the Windows keychain and tray have only been compiled here, because this environment can't run Windows binaries. Keychain support exists only on Windows, so other builds can't enroll. The server's API is in the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
 
 ## Stack
 
 Go, built as a single binary with no runtime. Keep `CGO_ENABLED=0` for release builds so cross-compiling stays simple, and prefer pure-Go dependencies (`modernc.org/sqlite`, not `mattn/go-sqlite3`). Ask before adding a dependency, since every one ships to operators' computers.
 
-The UI is a small settings and status page served on localhost, plus a tray icon.
+The UI is a small settings and status page served on localhost, plus a tray icon. It uses Go templates with Tailwind and daisyUI, with the same themes as Field Day Commander. The stylesheet is compiled and committed, so a plain Go build needs no Node.js. After changing `internal/ui/styles/app.css` or the page's classes, run `scripts/build-css.cjs` (versions are in `package.json`). `internal/ui/styles/theme.css` is generated from the app's stylesheet by `scripts/sync-theme.cjs`, so change colors in the app, and `--check` reports any drift.
 
 ## Where it runs
 
@@ -23,16 +23,17 @@ The UI is a small settings and status page served on localhost, plus a tray icon
 
 ## Design rules
 
-- **Outbound only.** The relay makes outbound HTTPS or WSS connections to the server, so it works behind NAT without port forwarding. Its local UI listens on loopback only.
+- **Outbound only to the server.** The relay makes outbound HTTPS or WSS connections to the server, so it works behind NAT without port forwarding. Its local UI listens on loopback only. As an N3FJP network server it listens on loopback too, and on the LAN only after someone turns that on, because N3FJP has no password. Never suggest forwarding that port.
 - **Store before sending.** Write each contact to the local queue before any attempt to send it. Losing a contact is the worst failure this program can have.
 - **Retries can't create duplicates.** Each contact gets a stable idempotency key, derived from its own fields. Never use N3FJP record IDs for this: each client assigns them by counting ADDs in order, so they aren't stable.
 - **TLS always verified.** Never add an option to skip certificate checks for remote servers. Self-signed club servers get certificate pinning instead.
 - **Credentials.** A relay enrolls with a one-time code and receives a revocable per-relay token, stored in the OS keychain. Never write it to a log or a plain config file.
+- **Two-way sync compares with the server, not the logger.** A contact counts as changed only when it differs from what the server last said, and only the fields that changed reach the logger, so values the server doesn't store (a `5NN` report) are never overwritten. An unanswered upload is newer than anything the feed shows, so feed changes for that contact wait. Identity is the contact's `uuid`, which also reaches contacts logged elsewhere with no idempotency key.
 - **Local data is untrusted.** Local logger protocols have no authentication, so anything on the LAN could be talking to the relay. Validate everything before it's queued, and default to connecting only to localhost or an address the user set.
 
 ## Log sources
 
-- **N3FJP network protocol (TCP 1000):** UTF-16LE, frames end with `\x03\x04\x07`, messages are `<BOR>…<EOR>`. There's no auth, handshake or version check. A server in TCP mode answers `OPEN` (`CLEAR`, `GET`..., `LIST`) and `CHECK` on the asking connection alone, and relays everything else to all clients. A server in file-share mode relays `OPEN` and `CHECK` too, which makes every PC beep and warn, so the relay sends one `OPEN` per connection and no `CHECK` until the server answers. The relay joins as a listening client and sends nothing else. It needs N3FJP's TCP network mode, and hasn't been run against real N3FJP software yet.
+- **N3FJP network protocol (TCP 1000):** UTF-16LE, frames end with `\x03\x04\x07`, messages are `<BOR>…<EOR>`. There's no auth, handshake or version check. A server in TCP mode answers `OPEN` (`CLEAR`, `GET`..., `LIST`) and `CHECK` on the asking connection alone, and relays everything else to all clients. A server in file-share mode relays `OPEN` and `CHECK` too, which makes every PC beep and warn, so the relay sends one `OPEN` per connection and no `CHECK` until the server answers. The relay has two roles. As a client it joins an existing N3FJP server, and after the log loads it can send `ADD`, `EDIT` and `DELETE`, but never clock syncs, chat or `BAMS`. As a server, N3FJP PCs connect to it like a local Field Day Commander, and it owns the log and numbering (a deleted number isn't reused, and an empty log starts over at 1, as in N3FJP). Either needs N3FJP's TCP network mode. Neither has been run against real N3FJP software yet.
 - **Other loggers:** the app's listeners in `app/Console/Commands/*ListenCommand.php` show how it handles N1MM Logger+, WSJT-X/JTDX, fldigi and ADIF-over-UDP.
 - **N1MM peer network (12070), if ever joined:** never send `FUNCTIONKEY` (keys another PC's radio), `TIME` (sets its clock) or `FILE` (overwrites its data files).
 

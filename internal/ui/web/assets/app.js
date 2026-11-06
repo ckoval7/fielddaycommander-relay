@@ -19,3 +19,18 @@ async function refresh() {
 }
 
 setInterval(refresh, refreshSeconds * 1000);
+
+// Show only the settings for the chosen role. Other PCs can only connect to a
+// relay that's the N3FJP server.
+const listen = document.querySelector('input[name="listen_on_network"]');
+for (const role of document.querySelectorAll('input[name="role"]')) {
+  role.addEventListener('change', () => {
+    for (const group of document.querySelectorAll('[data-role]')) {
+      group.hidden = group.dataset.role !== role.value;
+    }
+    listen.disabled = role.value !== 'server';
+    if (listen.disabled) {
+      listen.checked = false;
+    }
+  });
+}

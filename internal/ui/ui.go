@@ -46,7 +46,7 @@ type Backend interface {
 	Status(ctx context.Context) (app.Status, error)
 	Enroll(ctx context.Context, request app.EnrollRequest) error
 	Forget(ctx context.Context) error
-	SetLoggerAddress(address string) error
+	SetLogger(role, address string, listenOnNetwork bool) error
 }
 
 // Server serves the page.
@@ -66,6 +66,8 @@ func New(backend Backend, log *slog.Logger) (*Server, error) {
 	}
 	pages, err := template.New("").Funcs(template.FuncMap{
 		"senderState": senderStateText,
+		"senderLabel": senderLabelText,
+		"senderBadge": senderBadgeClass,
 		"enrollError": enrollErrorText,
 		"attention":   attentionText,
 		"text":        func() pageText { return pageWords },
@@ -100,7 +102,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(assets)))
 	mux.HandleFunc("POST /enroll", s.protected(s.enroll))
 	mux.HandleFunc("POST /forget", s.protected(s.forget))
-	mux.HandleFunc("POST /logger", s.protected(s.logger))
+	mux.HandleFunc("POST /n3fjp", s.protected(s.logger))
 	return s.guard(mux)
 }
 
@@ -138,10 +140,12 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		header := w.Header()
-		header.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		header.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		header.Set("X-Frame-Options", "DENY")
 		header.Set("X-Content-Type-Options", "nosniff")
-		header.Set("Referrer-Policy", "no-referrer")
+		// Not no-referrer: with that, browsers send "Origin: null" on this page's own
+		// form posts, and the same-origin check can't tell them from another site's.
+		header.Set("Referrer-Policy", "same-origin")
 		header.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
@@ -169,6 +173,12 @@ func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.PostFormValue("form_token")), []byte(s.formToken)) != 1 {
+			// A tab left open across a relay restart holds the old run's token. It
+			// changes nothing, so send the person back to a fresh page.
+			if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+				return
+			}
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -243,14 +253,14 @@ func (s *Server) forget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logger(w http.ResponseWriter, r *http.Request) {
-	err := s.backend.SetLoggerAddress(r.PostFormValue("address"))
+	err := s.backend.SetLogger(r.PostFormValue("role"), r.PostFormValue("address"), r.PostFormValue("listen_on_network") != "")
 	switch {
 	case err == nil:
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, app.ErrBadLoggerAddress):
 		s.render(w, r, "index.html", view{LoggerError: true})
 	default:
-		s.log.Error("saving the logger address failed", "error", err)
+		s.log.Error("saving the N3FJP settings failed", "error", err)
 		s.render(w, r, "index.html", view{ActionError: true})
 	}
 }

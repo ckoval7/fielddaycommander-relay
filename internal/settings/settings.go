@@ -27,6 +27,12 @@ type Settings struct {
 	// LoggerAddress is the N3FJP network server's host and port. Empty means
 	// the default, this computer.
 	LoggerAddress string `json:"logger_address,omitempty"`
+	// LoggerRole is "server" when N3FJP PCs connect to the relay. Empty means the
+	// relay joins an existing N3FJP network server as a client.
+	LoggerRole string `json:"logger_role,omitempty"`
+	// ListenOnNetwork lets other PCs reach the relay's N3FJP server. N3FJP's
+	// protocol has no password, so it's off until someone turns it on.
+	ListenOnNetwork bool `json:"listen_on_network,omitempty"`
 }
 
 // Load reads the settings in dir. Missing settings are empty ones, which is how

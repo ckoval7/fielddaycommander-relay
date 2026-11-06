@@ -366,12 +366,12 @@ func TestLoggerAddress(t *testing.T) {
 		}
 	}
 	for _, address := range []string{"host:99999", "host:abc", "a b", "http://host/", ":1000"} {
-		if err := h.app.SetLoggerAddress(address); !errors.Is(err, ErrBadLoggerAddress) {
+		if err := h.app.SetLogger(RoleClient, address, false); !errors.Is(err, ErrBadLoggerAddress) {
 			t.Errorf("%q: err = %v", address, err)
 		}
 	}
 
-	if err := h.app.SetLoggerAddress("192.168.1.5"); err != nil {
+	if err := h.app.SetLogger(RoleClient, "192.168.1.5", false); err != nil {
 		t.Fatal(err)
 	}
 	status, err := h.app.Status(context.Background())
@@ -384,6 +384,91 @@ func TestLoggerAddress(t *testing.T) {
 	saved, _ := settings.Load(h.dir)
 	if saved.LoggerAddress != "192.168.1.5:1000" {
 		t.Errorf("saved = %+v", saved)
+	}
+}
+
+func TestTheRoleCanChangeAndIsRemembered(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	if err := h.app.SetLogger("nonsense", "", false); !errors.Is(err, ErrBadRole) {
+		t.Errorf("err = %v", err)
+	}
+	if err := h.app.SetLogger(RoleServer, "", true); err != nil {
+		t.Fatal(err)
+	}
+	status, err := h.app.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.ServerRole || !status.ListenOnNetwork {
+		t.Errorf("status = %+v", status)
+	}
+	saved, _ := settings.Load(h.dir)
+	if saved.LoggerRole != RoleServer || !saved.ListenOnNetwork {
+		t.Errorf("saved = %+v", saved)
+	}
+
+	if err := h.app.SetLogger(RoleClient, "", true); err != nil {
+		t.Fatal(err)
+	}
+	status, _ = h.app.Status(context.Background())
+	if status.ServerRole || status.ListenOnNetwork {
+		t.Errorf("a client has nothing to listen for: %+v", status)
+	}
+}
+
+func TestChangingRoleStartsTheFeedOverButOnlyWhenItChanges(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	ctx := context.Background()
+	set := func() {
+		t.Helper()
+		if err := h.app.queue.SetMeta(ctx, "feed_cursor", "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor := func() string {
+		t.Helper()
+		value, err := h.app.queue.Meta(ctx, "feed_cursor")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+
+	set()
+	if err := h.app.SetLogger(RoleServer, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if cursor() != "" {
+		t.Error("becoming the server has to fill its log from the start")
+	}
+
+	set()
+	if err := h.app.SetLogger(RoleServer, "", true); err != nil {
+		t.Fatal(err)
+	}
+	if cursor() != "x" {
+		t.Error("the same role with another setting shouldn't start over")
+	}
+}
+
+// Saving the form unchanged mustn't drop every connected N3FJP PC.
+func TestSavingWhatIsAlreadySetRestartsNothing(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	if err := h.app.SetLogger(RoleClient, "192.168.1.5", false); err != nil {
+		t.Fatal(err)
+	}
+	h.app.mu.RLock()
+	before := h.app.source
+	h.app.mu.RUnlock()
+
+	if err := h.app.SetLogger(RoleClient, " 192.168.1.5:1000 ", false); err != nil {
+		t.Fatal(err)
+	}
+	h.app.mu.RLock()
+	after := h.app.source
+	h.app.mu.RUnlock()
+	if before != after {
+		t.Error("an unchanged save restarted the connection")
 	}
 }
 

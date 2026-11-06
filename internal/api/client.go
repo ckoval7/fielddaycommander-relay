@@ -255,6 +255,42 @@ type Handshake struct {
 		CreateStations bool `json:"create_stations"`
 	} `json:"permissions"`
 	Stations []Station `json:"stations"`
+	// Capabilities are false on servers that predate them.
+	Capabilities struct {
+		ContactFeed bool `json:"contact_feed"`
+		UploadUUID  bool `json:"upload_uuid"`
+	} `json:"capabilities"`
+}
+
+// ContactChange is a contact's current state from the feed. Values follow the
+// server's data and aren't limited by the upload rules.
+type ContactChange struct {
+	UUID           string    `json:"uuid"`
+	Deleted        bool      `json:"deleted"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	Callsign       string    `json:"callsign"`
+	QSOTime        string    `json:"qso_time"`
+	Band           string    `json:"band"`
+	Mode           string    `json:"mode"`
+	FrequencyHz    int64     `json:"frequency_hz"`
+	Operator       string    `json:"operator"`
+	Station        string    `json:"station"`
+	ExchangeClass  string    `json:"exchange_class"`
+	Section        string    `json:"section"`
+	PowerWatts     int       `json:"power_watts"`
+	RSTSent        string    `json:"rst_sent"`
+	RSTReceived    string    `json:"rst_received"`
+	GridSquare     string    `json:"grid_square"`
+	ContactName    string    `json:"contact_name"`
+	Notes          string    `json:"notes"`
+}
+
+// ChangePage is one page of the contact feed.
+type ChangePage struct {
+	Contacts   []ContactChange `json:"contacts"`
+	NextCursor string          `json:"next_cursor"`
+	HasMore    bool            `json:"has_more"`
 }
 
 // Result is the server's answer for one contact.
@@ -301,6 +337,18 @@ func (c *Client) SendContacts(ctx context.Context, contacts []contact.Contact) (
 		}
 	}
 	return results, nil
+}
+
+// ContactChanges reads the changes after cursor. An empty cursor starts from the
+// beginning.
+func (c *Client) ContactChanges(ctx context.Context, cursor string, limit int) (ChangePage, error) {
+	query := url.Values{"limit": {strconv.Itoa(limit)}}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	var page ChangePage
+	err := c.do(ctx, http.MethodGet, "/contacts?"+query.Encode(), nil, http.StatusOK, &page)
+	return page, err
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, want int, out any) error {

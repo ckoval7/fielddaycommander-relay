@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/contact"
@@ -25,11 +26,11 @@ const SourceName = "n3fjp"
 // address. N3FJP has no authentication, so nothing else is assumed to be safe.
 const DefaultAddress = "127.0.0.1:1000"
 
-// The only two messages the relay ever sends. An N3FJP server in TCP mode answers
-// both on the asking connection alone. It relays anything else to every PC, so
-// the source has no way to send an ADD, EDIT, DELETE, clock sync or chat. It also
-// never announces a station with BAMS, which would put the relay on everyone's
-// band status display.
+// The source's own messages. An N3FJP server in TCP mode answers both on the
+// asking connection alone. Anything else it relays to every PC, so the only other
+// things the relay ever sends are the contact changes in writer.go, once the log
+// has loaded. It never sends a clock sync or chat, and never announces a station
+// with BAMS, which would put the relay on everyone's band status display.
 const (
 	messageOpen  = "<BOR><NTWK><OPEN>"
 	messageCheck = "<BOR><NTWK><CHECK>"
@@ -45,12 +46,16 @@ const (
 	readBufferSize = 8192
 	maxRecords     = 200_000
 	maxRawInvalid  = 2048
+
+	writeRequestTimeout = 10 * time.Second
 )
 
 // Sink stores what the source reads. Put must have made the contact durable
 // before it returns.
 type Sink interface {
 	Put(ctx context.Context, c contact.Contact) (queued bool, err error)
+	// Remember records a contact as already known, without queueing it.
+	Remember(ctx context.Context, c contact.Contact) error
 	PutInvalid(ctx context.Context, source, reason, raw string) error
 }
 
@@ -78,6 +83,9 @@ type Source struct {
 	reconnectMin time.Duration
 	reconnectCap time.Duration
 
+	writes chan writeRequest
+	ready  atomic.Bool
+
 	statusMu sync.Mutex
 	status   Status
 }
@@ -94,6 +102,7 @@ func NewSource(address string, sink Sink, notify func(), log *slog.Logger) *Sour
 		reloadGap:    minReloadGap,
 		reconnectMin: reconnectStart,
 		reconnectCap: reconnectMax,
+		writes:       make(chan writeRequest),
 	}
 }
 
@@ -116,6 +125,7 @@ func (s *Source) Run(ctx context.Context) {
 			status.Connected = false
 			status.LogAnswered = false
 		})
+		s.ready.Store(false)
 		if ctx.Err() != nil {
 			return
 		}
@@ -181,10 +191,13 @@ func (s *Source) session(ctx context.Context) error {
 			if err := state.send(messageCheck); err != nil {
 				return err
 			}
+		case request := <-s.writes:
+			request.done <- state.applyWrite(sessionCtx, request)
 		case message := <-messages:
 			if err := state.handle(sessionCtx, message); err != nil {
 				return err
 			}
+			s.ready.Store(state.loaded && state.loading == nil)
 			s.setStatus(func(status *Status) {
 				status.LastMessage = time.Now()
 				status.RecordsKnown = len(state.records)
@@ -226,6 +239,9 @@ type record struct {
 	callsign string
 	qsoTime  string
 	station  string
+	// fields keeps the whole record, so an edit changes only what it means to
+	// and leaves everything else as the operator entered it.
+	fields map[string]string
 }
 
 // session is one connection's view of the log.
@@ -242,6 +258,7 @@ type session struct {
 	counter  int
 	lastOpen time.Time
 	answered bool
+	loaded   bool
 }
 
 func (s *session) send(message string) error {
@@ -298,6 +315,7 @@ func (s *session) handle(ctx context.Context, message string) error {
 		if s.loading != nil {
 			s.records = s.loading
 			s.loading = nil
+			s.loaded = true
 		}
 	case "ADD":
 		s.counter++
@@ -321,10 +339,10 @@ func (s *session) store(ctx context.Context, number int, fields map[string]strin
 
 	c, err := toContact(fields, from)
 	if err != nil {
-		table[number] = record{}
+		table[number] = record{fields: fields}
 		return s.invalid(ctx, err, raw)
 	}
-	table[number] = recordFor(c)
+	table[number] = recordFor(c, fields)
 	return s.put(ctx, c)
 }
 
@@ -347,7 +365,7 @@ func (s *session) edit(ctx context.Context, raw, from string) error {
 	if previous.key != c.IdempotencyKey && !keyInUse(table, number, previous.key) {
 		c.ReplacesKey = previous.key
 	}
-	table[number] = recordFor(c)
+	table[number] = recordFor(c, fields)
 
 	if err := s.put(ctx, c); err != nil {
 		return err
@@ -381,13 +399,18 @@ func (s *session) delete(ctx context.Context, raw string) error {
 	if previous.key == "" || keyInUse(table, number, previous.key) {
 		return nil
 	}
-	return s.put(ctx, contact.Contact{
+	return s.put(ctx, deleteOf(previous))
+}
+
+// deleteOf is the contact change that deletes a record.
+func deleteOf(previous record) contact.Contact {
+	return contact.Contact{
 		IdempotencyKey: previous.key,
 		Deleted:        true,
 		Callsign:       previous.callsign,
 		QSOTime:        previous.qsoTime,
 		Station:        previous.station,
-	})
+	}
 }
 
 // compare checks the count and last number the server reports against this
@@ -450,8 +473,8 @@ func (s *session) invalid(ctx context.Context, cause error, raw string) error {
 	return nil
 }
 
-func recordFor(c contact.Contact) record {
-	return record{key: c.IdempotencyKey, callsign: c.Callsign, qsoTime: c.QSOTime, station: c.Station}
+func recordFor(c contact.Contact, fields map[string]string) record {
+	return record{key: c.IdempotencyKey, callsign: c.Callsign, qsoTime: c.QSOTime, station: c.Station, fields: fields}
 }
 
 func (s *Source) setStatus(change func(*Status)) {

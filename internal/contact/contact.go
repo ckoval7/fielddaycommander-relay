@@ -55,6 +55,7 @@ type Contact struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	ReplacesKey    string `json:"replaces_key,omitempty"`
 	Deleted        bool   `json:"deleted,omitempty"`
+	UUID           string `json:"uuid,omitempty"`
 	Callsign       string `json:"callsign"`
 	QSOTime        string `json:"qso_time"`
 	Band           string `json:"band,omitempty"`
@@ -90,7 +91,7 @@ func Normalize(c Contact) (Contact, []string, error) {
 		return value
 	}
 
-	out := Contact{ReplacesKey: c.ReplacesKey, Deleted: c.Deleted}
+	out := Contact{ReplacesKey: c.ReplacesKey, Deleted: c.Deleted, UUID: c.UUID}
 
 	out.Callsign = strings.ToUpper(clean(c.Callsign))
 	if out.Callsign == "" || len(out.Callsign) > maxCallsign || !callsignPattern.MatchString(out.Callsign) {
