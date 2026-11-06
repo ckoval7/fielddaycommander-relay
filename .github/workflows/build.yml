@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Checks main and builds the relay, keeping the binaries as run artifacts. Release
+# tags build too, stamped with their version. Nothing is published.
+#
+# Actions are pinned to commit SHAs; the comment names the release.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Each job grants only what it needs.
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Run gofmt on: $unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go test -race ./...
+
+      - name: Check licensing
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
+
+  check-windows:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./...
+
+      # The file window, tray icon and keychain need someone logged in at a desktop,
+      # so those tests are run by hand on a real Windows PC.
+      - name: Run the tests
+        shell: bash
+        run: |
+          mapfile -t packages < <(go list ./... | grep -v -E '/internal/(filepicker|secret|tray)$')
+          go test "${packages[@]}"
+
+  build:
+    needs: [check, check-windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            file: relay.exe
+            ldflags: -H=windowsgui
+          - goos: linux
+            file: relay
+            ldflags: ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CGO_ENABLED: '0'
+      GOOS: ${{ matrix.goos }}
+      GOARCH: amd64
+      FILE: ${{ matrix.file }}
+      LDFLAGS: ${{ matrix.ldflags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # A release tag gives the version. The relay doesn't compare anything else
+      # with the server's minimum, so other builds never warn about being outdated.
+      - name: Work out the version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=dev-${GITHUB_SHA::7}
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: go build -trimpath -ldflags "-s -w $LDFLAGS -X main.version=$VERSION" -o "dist/$FILE" ./cmd/relay
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fielddaycommander-relay-${{ env.VERSION }}-${{ matrix.goos }}-amd64
+          path: dist/${{ matrix.file }}
+          if-no-files-found: error
