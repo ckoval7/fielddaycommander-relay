@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
@@ -30,6 +31,9 @@ const (
 	backoffMax    = 5 * time.Minute
 	blockedWait   = 5 * time.Minute
 	clockSkewWarn = 2 * time.Minute
+	// How often to ask again for what can change on the server: its stations,
+	// permissions and event dates.
+	handshakeEvery = 5 * time.Minute
 
 	noResultCode = "no_result"
 )
@@ -61,6 +65,26 @@ type Status struct {
 	// ClockSkew is how far this computer's clock is from the server's, set when
 	// it's far enough off to put contacts outside the event.
 	ClockSkew time.Duration
+	// StationsKnown is whether the server has said what's in Stations and
+	// CanCreateStations. Stations can be empty when it has.
+	StationsKnown     bool
+	Stations          []api.Station
+	CanCreateStations bool
+}
+
+// StationChoice is the station a person picked for this relay.
+type StationChoice struct {
+	Name string
+	// Override also replaces a station the contact names itself.
+	Override bool
+}
+
+// For returns the station to send for a contact that names station.
+func (c StationChoice) For(station string) string {
+	if c.Name != "" && (c.Override || station == "") {
+		return c.Name
+	}
+	return station
 }
 
 // Client is the part of the API the sender uses.
@@ -77,13 +101,18 @@ type Sender struct {
 	log     *slog.Logger
 	wake    chan struct{}
 
+	station       atomic.Pointer[StationChoice]
+	askAgain      atomic.Bool
+	lastHandshake time.Time
+
 	// Test hooks for the waits.
-	poll     time.Duration
-	maxWait  time.Duration
-	minWait  time.Duration
-	blocked  time.Duration
-	statusMu sync.Mutex
-	status   Status
+	poll           time.Duration
+	maxWait        time.Duration
+	minWait        time.Duration
+	blocked        time.Duration
+	handshakeEvery time.Duration
+	statusMu       sync.Mutex
+	status         Status
 }
 
 // New returns a Sender for this relay version.
@@ -99,7 +128,23 @@ func New(q *queue.Queue, client Client, version string, log *slog.Logger) *Sende
 		maxWait: backoffMax,
 		blocked: blockedWait,
 		status:  Status{State: Starting},
+
+		handshakeEvery: handshakeEvery,
 	}
+}
+
+// SetStation sets the station for contacts sent from now on. Queued contacts keep
+// what the logger said, so a new choice also reaches those still waiting, and
+// nothing already sent goes out again.
+func (s *Sender) SetStation(choice StationChoice) {
+	s.station.Store(&choice)
+}
+
+// AskServerAgain gets the server's stations, permissions and event dates again
+// without waiting for the next regular check.
+func (s *Sender) AskServerAgain() {
+	s.askAgain.Store(true)
+	s.Wake()
 }
 
 // Wake tells the sender a contact is waiting, so it doesn't wait for its next
@@ -148,7 +193,7 @@ func (s *Sender) Run(ctx context.Context) {
 // step does one round of work. It returns how long to wait before the next
 // round, with 0 meaning no particular wait, and whether the server was usable.
 func (s *Sender) step(ctx context.Context, shookHands *bool) (time.Duration, bool) {
-	if !*shookHands {
+	if !*shookHands || s.askAgain.Swap(false) || time.Since(s.lastHandshake) >= s.handshakeEvery {
 		if wait, ok := s.handshake(ctx); !ok {
 			return wait, false
 		}
@@ -164,9 +209,14 @@ func (s *Sender) step(ctx context.Context, shookHands *bool) (time.Duration, boo
 		return s.poll, true
 	}
 
+	var choice StationChoice
+	if current := s.station.Load(); current != nil {
+		choice = *current
+	}
 	contacts := make([]contact.Contact, len(items))
 	for i, item := range items {
 		contacts[i] = item.Contact
+		contacts[i].Station = choice.For(item.Contact.Station)
 	}
 
 	results, err := s.client.SendContacts(ctx, contacts)
@@ -203,8 +253,18 @@ func (s *Sender) handshake(ctx context.Context) (time.Duration, bool) {
 		return s.blocked, false
 	}
 
+	if event := handshake.Event; event != nil {
+		if err := s.queue.SetEventPeriod(ctx, event.StartsAt, event.EndsAt); err != nil {
+			s.log.Error("saving the event's dates failed", "error", err)
+		}
+	}
+
+	s.lastHandshake = time.Now()
 	s.setStatus(func(status *Status) {
 		status.State = Online
+		status.StationsKnown = true
+		status.Stations = handshake.Stations
+		status.CanCreateStations = handshake.Permissions.CreateStations
 		status.ServerVersion = handshake.ServerVersion
 		status.Event = ""
 		if handshake.Event != nil {

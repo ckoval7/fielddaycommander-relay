@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/filepicker"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
 	"github.com/ckoval7/fielddaycommander-relay/internal/tray"
 	"github.com/ckoval7/fielddaycommander-relay/internal/ui"
@@ -86,7 +87,7 @@ func run() error {
 	port := listener.Addr().(*net.TCPAddr).Port
 	url := pageURL(port)
 
-	relay, err := app.New(app.Config{DataDir: dataDir, Version: version, Store: secret.New(secret.DefaultTarget), Log: log})
+	relay, err := app.New(app.Config{DataDir: dataDir, Version: version, Store: secret.New(secret.DefaultTarget), Log: log, PickLogFile: pickLogFile})
 	if err != nil {
 		_ = listener.Close()
 		return err
@@ -228,4 +229,20 @@ func openBrowser(url string, log *slog.Logger) {
 		return
 	}
 	go func() { _ = command.Wait() }()
+}
+
+// pickLogFile starts in the folder where WSJT-X or JTDX keeps its log, if there is
+// one: Windows hides that folder, so few people could find it themselves.
+func pickLogFile() (string, error) {
+	var folders []string
+	if local, err := os.UserCacheDir(); err == nil {
+		folders = []string{filepath.Join(local, "WSJT-X"), filepath.Join(local, "JTDX")}
+	}
+	return filepicker.Open(filepicker.Options{
+		Title:          ui.PickerText.Title,
+		FilterName:     ui.PickerText.LogFiles,
+		Patterns:       "*.adi;*.adif",
+		AllFilesName:   ui.PickerText.AllFiles,
+		DefaultFolders: folders,
+	})
 }

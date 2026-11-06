@@ -291,6 +291,21 @@ func TestStatusReportsEventAndClockSkew(t *testing.T) {
 	}
 }
 
+func TestTheEventsDatesAreSaved(t *testing.T) {
+	starts := time.Date(2026, 6, 27, 18, 0, 0, 0, time.UTC)
+	ends := starts.Add(27 * time.Hour)
+	client := &fakeClient{handshake: func() (api.Handshake, error) {
+		return api.Handshake{SupportedAPIVersions: []int{1}, ServerTime: time.Now(), Event: &api.Event{Name: "Field Day", StartsAt: starts, EndsAt: ends}}, nil
+	}}
+	h := start(t, client, "26.11.1")
+
+	eventually(t, "handshake", func() bool { return h.sender.Status().Event != "" })
+	gotStart, gotEnd, known, err := h.queue.EventPeriod(context.Background())
+	if err != nil || !known || !gotStart.Equal(starts) || !gotEnd.Equal(ends) {
+		t.Errorf("got %v to %v, known %v, %v", gotStart, gotEnd, known, err)
+	}
+}
+
 func TestWakeSendsWithoutWaitingForThePoll(t *testing.T) {
 	client := &fakeClient{}
 	h := startPolling(t, client, "26.11.1", time.Hour)

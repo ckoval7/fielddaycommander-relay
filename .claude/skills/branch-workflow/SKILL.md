@@ -31,25 +31,19 @@ git branch -D fix/thing                         # -D is needed after a squash
 
 ## Running Go tooling
 
-The host doesn't have Go, so run it in a one-off container from the repo root. Once `go.mod` exists, use the image tag matching its `go` line instead of `golang:1`.
+The host doesn't have Go, so `scripts/go.sh` runs it in a container that sees only the repo and Go's cache folder. It reads the image tag from `go.mod`. Run it as its own command, not chained or inside a shell function, so the allow rule in `.claude/settings.local.json` matches it and it runs without a prompt.
 
 ```bash
-gorun() { mkdir -p "$HOME/.cache/fdc-relay-go"; docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" \
-  -v "$HOME/.cache/fdc-relay-go":/cache -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
-  golang:1 "$@"; }
-
-gorun go test ./path/to/pkg        # while working: the packages you touched
-gorun go test -race ./...          # full suite, before merging into dev
-gorun go vet ./...
-gorun gofmt -l .                   # must print nothing
+scripts/go.sh test ./path/to/pkg        # while working: the packages you touched
+scripts/go.sh test -race ./...          # full suite, before merging into dev
+scripts/go.sh vet ./...
+scripts/go.sh gofmt -l .                # must print nothing
 ```
 
 Run the Windows build before merging too, since Windows is the primary target:
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" -v "$HOME/.cache/fdc-relay-go":/cache \
-  -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
-  -e CGO_ENABLED=0 -e GOOS=windows -e GOARCH=amd64 golang:1 go build ./...
+scripts/go.sh windows build ./...
 ```
 
 ## Checking licensing

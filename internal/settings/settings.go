@@ -33,6 +33,18 @@ type Settings struct {
 	// ListenOnNetwork lets other PCs reach the relay's N3FJP server. N3FJP's
 	// protocol has no password, so it's off until someone turns it on.
 	ListenOnNetwork bool `json:"listen_on_network,omitempty"`
+	// LogFiles are ADIF logs on disk to pick contacts up from.
+	LogFiles []string `json:"log_files,omitempty"`
+	// N1MMEnabled listens for N1MM Logger+'s broadcasts. It's off until asked for,
+	// because only one program on a PC can hold that port.
+	N1MMEnabled bool `json:"n1mm_enabled,omitempty"`
+	// N1MMOnNetwork lets other PCs' N1MM send here. Its broadcasts have no password.
+	N1MMOnNetwork bool `json:"n1mm_on_network,omitempty"`
+	// Station is the server's station this relay is set up for. Empty means the
+	// server uses the relay's name.
+	Station string `json:"station,omitempty"`
+	// StationOverride also uses Station for contacts that name their own station.
+	StationOverride bool `json:"station_override,omitempty"`
 }
 
 // Load reads the settings in dir. Missing settings are empty ones, which is how

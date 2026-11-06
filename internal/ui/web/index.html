@@ -33,7 +33,6 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <div id="status" class="flex flex-col gap-4" aria-live="polite">{{template "status" .}}</div>
 
-<div class="grid gap-4 lg:grid-cols-2 items-start">
 {{if .Status.Enrolled}}
 <section class="card card-border bg-base-100">
 <div class="card-body">
@@ -45,21 +44,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
 {{with shortTime .Status.Sender.LastSent}}<dt class="opacity-70">{{text.LastSentLabel}}</dt><dd>{{.}}</dd>{{end}}
 </dl>
 {{if .Status.Pinned}}<p class="text-sm opacity-70">{{text.SelfSigned}}</p>{{end}}
+{{with .StationError}}<div class="alert alert-error" role="alert">{{.}}</div>{{end}}
+<div id="station">{{template "station" .}}</div>
 <form method="post" action="/forget" class="mt-2">
 <input type="hidden" name="form_token" value="{{.FormToken}}">
-<p class="text-sm opacity-70 mb-3">{{text.ForgetHelp}}</p>
+<div class="relative flex items-center gap-2">
 <button type="submit" class="btn btn-outline">{{text.ForgetButton}}</button>
+{{template "help" (help text.ForgetButton text.ForgetHelp)}}
+</div>
 </form>
 </div>
 </section>
 {{else}}
 <section class="card card-border bg-base-100">
 <div class="card-body">
+<div class="relative flex items-center gap-2">
 <h2 class="card-title text-base">{{text.ConnectHeading}}</h2>
+{{template "help" (help text.ConnectHeading text.EnrollMore)}}
+</div>
 <p class="text-sm opacity-70">{{text.EnrollHelp}}</p>
 {{with .EnrollErr}}<div class="alert alert-error" role="alert">{{enrollError .Failure}}</div>{{end}}
 <form method="post" action="/enroll" class="flex flex-col gap-3">
 <input type="hidden" name="form_token" value="{{.FormToken}}">
+<div class="grid gap-3 lg:grid-cols-2">
 <label>
 <span class="block text-sm font-medium mb-1">{{text.ServerLabel}}</span>
 <input class="input w-full" name="server_url" value="{{.ServerURL}}" required autocomplete="off" spellcheck="false" placeholder="https://logs.example.org">
@@ -68,6 +75,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <span class="block text-sm font-medium mb-1">{{text.CodeLabel}}</span>
 <input class="input w-full" name="code" value="{{.Code}}" required autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH-JKMN">
 </label>
+</div>
 {{if and .EnrollErr .EnrollErr.Fingerprint}}
 <p class="text-sm">{{text.KeyLabel}}: <code class="break-all">{{fingerprint .EnrollErr.Fingerprint}}</code></p>
 <input type="hidden" name="pin" value="{{.EnrollErr.Fingerprint}}">
@@ -80,30 +88,71 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </section>
 {{end}}
 
+<div id="log-files" aria-live="polite">{{template "logfiles" .}}</div>
+
+<div class="grid gap-4 lg:grid-cols-2 items-start">
 <section class="card card-border bg-base-100">
 <div class="card-body">
 <h2 class="card-title text-base">{{text.SetupHeading}}</h2>
 {{if .LoggerError}}<div class="alert alert-error" role="alert">{{text.LoggerError}}</div>{{end}}
 <form method="post" action="/n3fjp" class="flex flex-col gap-3">
 <input type="hidden" name="form_token" value="{{.FormToken}}">
-<fieldset class="flex flex-col gap-2">
-<legend class="text-sm font-medium mb-1">{{text.RoleHeading}}</legend>
-<label class="flex items-center gap-2 cursor-pointer"><input type="radio" class="radio radio-sm radio-primary" name="role" value="client"{{if not .Status.ServerRole}} checked{{end}}> {{text.RoleClientLabel}}</label>
-<label class="flex items-center gap-2 cursor-pointer"><input type="radio" class="radio radio-sm radio-primary" name="role" value="server"{{if .Status.ServerRole}} checked{{end}}> {{text.RoleServerLabel}}</label>
+{{if .Status.N3FJPOff}}
+<p class="text-sm opacity-70">{{text.N3FJPOffText}}</p>
+<input type="hidden" name="role" value="client">
+<input type="hidden" name="address" value="{{.Status.LoggerAddress}}">
+<div><button type="submit" class="btn btn-outline">{{text.N3FJPUseButton}}</button></div>
+{{else}}
+<div class="relative flex items-center gap-2">
+<span id="role-heading" class="text-sm font-medium">{{text.RoleHeading}}</span>
+{{if .Status.ServerRole}}{{template "help" (help text.SetupHeading text.RoleHelp)}}{{end}}
+</div>
+<fieldset class="flex flex-col gap-2" aria-labelledby="role-heading">
+<label class="flex items-center gap-2 cursor-pointer"><input type="radio" class="radio radio-sm radio-primary" name="role" value="client" data-autosave{{if not .Status.ServerRole}} checked{{end}}> {{text.RoleClientLabel}}</label>
+<label class="flex items-center gap-2 cursor-pointer"><input type="radio" class="radio radio-sm radio-primary" name="role" value="server" data-autosave{{if .Status.ServerRole}} checked{{end}}> {{text.RoleServerLabel}}</label>
+<label class="flex items-center gap-2 cursor-pointer"><input type="radio" class="radio radio-sm radio-primary" name="role" value="off" data-autosave> {{text.RoleOffLabel}}</label>
 </fieldset>
-<div class="flex flex-col gap-2" data-role="client"{{if .Status.ServerRole}} hidden{{end}}>
-<label>
-<span class="block text-sm font-medium mb-1">{{text.LoggerAddressLabel}}</span>
-<input class="input w-full" name="address" value="{{.Status.LoggerAddress}}" autocomplete="off" spellcheck="false">
-</label>
-<p class="text-sm opacity-70">{{text.LoggerHelp}}</p>
+{{if .Status.ServerRole}}
+<input type="hidden" name="address" value="{{.Status.LoggerAddress}}">
+<div class="flex flex-col gap-1">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="listen_on_network" data-autosave{{if .Status.ListenOnNetwork}} checked{{end}}> {{text.ListenLabel}}</label>
+{{template "help" (help text.ListenLabel text.ListenHelp)}}
 </div>
-<div class="flex flex-col gap-2" data-role="server"{{if not .Status.ServerRole}} hidden{{end}}>
-<p class="text-sm opacity-70">{{text.RoleHelp}}</p>
-<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="listen_on_network"{{if .Status.ListenOnNetwork}} checked{{end}}{{if not .Status.ServerRole}} disabled{{end}}> {{text.ListenLabel}}</label>
-<p class="text-sm opacity-70">{{text.ListenHelp}}</p>
+<p class="text-sm opacity-70">{{text.ListenWarning}}</p>
 </div>
-<div><button type="submit" class="btn btn-primary">{{text.RoleButton}}</button></div>
+{{else}}
+<div>
+<div class="relative flex items-center gap-2 mb-1">
+<label for="logger-address" class="text-sm font-medium">{{text.LoggerAddressLabel}}</label>
+{{template "help" (help text.LoggerAddressLabel text.LoggerHelp)}}
+</div>
+<div class="flex gap-2"><input id="logger-address" class="input w-full" name="address" value="{{.Status.LoggerAddress}}" autocomplete="off" spellcheck="false"><button type="submit" class="btn btn-primary">{{text.RoleButton}}</button></div>
+</div>
+{{end}}
+{{end}}
+</form>
+</div>
+</section>
+
+<section class="card card-border bg-base-100">
+<div class="card-body">
+<h2 class="card-title text-base">{{text.N1MMSetupHeading}}</h2>
+<form method="post" action="/n1mm" class="flex flex-col gap-3">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="enabled" data-autosave{{if .Status.N1MMEnabled}} checked{{end}}> {{text.N1MMEnableLabel}}</label>
+{{if .Status.N1MMEnabled}}{{template "help" (help text.N1MMEnableLabel text.N1MMHelp text.N1MMLimits)}}{{end}}
+</div>
+{{if .Status.N1MMEnabled}}
+<div class="flex flex-col gap-1">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="on_network" data-autosave{{if .Status.N1MMOnNetwork}} checked{{end}}> {{text.N1MMNetworkLabel}}</label>
+{{template "help" (help text.N1MMNetworkLabel text.N1MMNetworkHelp)}}
+</div>
+<p class="text-sm opacity-70">{{text.N1MMNetworkWarning}}</p>
+</div>
+{{end}}
 </form>
 </div>
 </section>
@@ -115,7 +164,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 {{define "status"}}
 {{if .Status.Sender.ClockSkew}}<div class="alert alert-warning alert-soft" role="status">{{printf text.ClockWarning (minutes .Status.Sender.ClockSkew)}}</div>{{end}}
 {{if and .Status.Enrolled (ne .Status.Sender.State "online")}}<div class="alert alert-soft {{if eq (senderBadge .Status.Sender.State) "badge-error"}}alert-error{{end}}" role="status">{{senderState .Status.Sender.State}}</div>{{end}}
-{{if .Status.ServerRole}}{{if not .Status.N3FJPServer.Listening}}<div class="alert alert-error alert-soft" role="status">{{text.ServerRoleFailed}}</div>{{end}}
+{{if and .Status.N1MMEnabled (not .Status.N1MM.Listening)}}<div class="alert alert-error alert-soft" role="status">{{text.N1MMBlocked}}</div>{{end}}
+{{if .Status.N1MM.Dropped}}<div class="alert alert-warning alert-soft" role="status">{{printf text.N1MMDropped .Status.N1MM.Dropped}}</div>{{end}}
+{{if .Status.N3FJPOff}}
+{{else if .Status.ServerRole}}{{if not .Status.N3FJPServer.Listening}}<div class="alert alert-error alert-soft" role="status">{{text.ServerRoleFailed}}</div>{{end}}
 {{else if not .Status.Source.Connected}}<div class="alert alert-warning alert-soft" role="status">{{text.LoggerConnecting}}</div>
 {{else if not .Status.Source.LogAnswered}}<div class="alert alert-warning alert-soft" role="status">{{text.LoggerWaiting}}</div>{{end}}
 
@@ -132,7 +184,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </div>
 <div class="stat">
 <div class="stat-title">{{text.LoggerHeading}}</div>
-{{if .Status.ServerRole}}
+{{if .Status.N3FJPOff}}
+<div class="py-1"><span class="badge badge-neutral">{{text.LoggerOffPill}}</span></div>
+{{else if .Status.ServerRole}}
 {{if .Status.N3FJPServer.Listening}}
 <div class="py-1"><span class="badge badge-success">{{text.ServerReadyPill}}</span></div>
 <div class="stat-desc">{{text.ServerClients}}: {{.Status.N3FJPServer.Clients}} · {{text.ServerRecords}}: {{.Status.N3FJPServer.Records}}</div>
@@ -150,6 +204,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <div class="stat-desc truncate">{{.Status.LoggerAddress}}</div>
 {{end}}
 </div>
+{{if .Status.N1MMEnabled}}
+<div class="stat">
+<div class="stat-title">{{text.N1MMHeading}}</div>
+{{if .Status.N1MM.Listening}}
+<div class="py-1"><span class="badge badge-success">{{text.N1MMListeningPill}}</span></div>
+<div class="stat-desc">{{text.N1MMContacts}}: {{.Status.N1MM.Contacts}}{{with shortTime .Status.N1MM.LastContact}} · {{text.N1MMLastContact}}: {{.}}{{end}}</div>
+{{else}}
+<div class="py-1"><span class="badge badge-error">{{text.N1MMBlockedPill}}</span></div>
+{{end}}
+</div>
+{{end}}
 <div class="stat">
 <div class="stat-title">{{text.Waiting}}</div>
 <div class="stat-value">{{.Status.Counts.Pending}}</div>
@@ -182,3 +247,91 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </section>
 {{end}}
 {{end}}
+
+{{define "help"}}<details class="shrink-0" data-help>
+<summary class="btn btn-ghost btn-circle btn-xs border-base-content/30 list-none [&::-webkit-details-marker]:hidden" aria-label="{{printf text.HelpLabel .Topic}}" title="{{printf text.HelpLabel .Topic}}">?</summary>
+<div class="absolute left-0 top-full z-50 mt-1 flex w-full max-w-md flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3 text-sm font-normal shadow-lg">
+{{range .Paragraphs}}<p>{{.}}</p>
+{{end}}</div>
+</details>{{end}}
+
+{{define "station"}}
+{{if .Status.Sender.StationsKnown}}
+<div class="flex flex-col gap-3">
+<form method="post" action="/station" class="flex flex-col gap-3">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+{{if .Status.StationOverride}}<input type="hidden" name="override" value="on">{{end}}
+<div>
+<div class="relative flex items-center gap-2 mb-1">
+<label for="station-choice" class="text-sm font-medium">{{text.StationLabel}}</label>
+{{template "help" (help text.StationLabel text.StationHelp)}}
+</div>
+<select id="station-choice" class="select w-full" name="station" autocomplete="off" data-autosave>
+<option value="">{{printf text.StationDefault .Status.RelayName}}</option>
+{{$picked := .Status.Station}}{{range stationList .Status}}<option value="{{.}}"{{if eq . $picked}} selected{{end}}>{{.}}</option>
+{{end}}{{if .Status.Sender.CanCreateStations}}<option value="{{$picked}}" data-new-station{{if .NewStation}} selected{{end}}>{{text.StationNewOption}}</option>
+{{end}}</select>
+</div>
+{{if stationMissing .Status}}<div class="alert alert-warning alert-soft" role="status">{{text.StationMissing}}</div>
+{{else if stationUnlisted .Status}}<p class="text-sm opacity-70">{{text.StationUnlisted}}</p>{{end}}
+{{if and (not .Status.Sender.Stations) (not .Status.Sender.CanCreateStations)}}<p class="text-sm">{{text.StationEmpty}}</p>{{end}}
+</form>
+{{if .Status.Sender.CanCreateStations}}
+<form id="new-station" method="post" action="/station" class="flex flex-col gap-1"{{if not .NewStation}} hidden{{end}}>
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+{{if .Status.StationOverride}}<input type="hidden" name="override" value="on">{{end}}
+<div class="relative flex items-center gap-2 mb-1">
+<label for="new-station-name" class="text-sm font-medium">{{text.StationNewLabel}}</label>
+{{template "help" (help text.StationNewLabel text.StationNewHelp)}}
+</div>
+<div class="flex gap-2"><input id="new-station-name" class="input w-full" name="new_station" value="{{.NewStation}}" maxlength="50" required autocomplete="off" spellcheck="false"><button type="submit" class="btn btn-primary">{{text.StationNewButton}}</button></div>
+</form>
+{{end}}
+{{if .Status.Station}}
+<form method="post" action="/station">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<input type="hidden" name="station" value="{{.Status.Station}}">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="override" data-autosave{{if .Status.StationOverride}} checked{{end}}> {{text.StationOverrideLabel}}</label>
+{{template "help" (help text.StationOverrideLabel text.StationOverrideHelp)}}
+</div>
+</form>
+{{end}}
+</div>
+{{else}}
+{{with .Status.Station}}<p class="text-sm"><span class="opacity-70">{{text.StationLabel}}:</span> {{.}}</p>{{end}}
+<p class="text-sm opacity-70">{{text.StationWaiting}}</p>
+{{end}}
+{{end}}
+
+{{define "logfiles"}}
+<section class="card card-border bg-base-100">
+<div class="card-body">
+<div class="relative flex items-center gap-2">
+<h2 class="card-title text-base">{{text.LogFilesHeading}}</h2>
+{{template "help" (help text.LogFilesHeading text.LogFilesHelp text.LogFilesLimits)}}
+</div>
+{{if .Status.LogFileChooseFailed}}<div class="alert alert-error alert-soft" role="alert">{{text.LogFileChooseFailed}}</div>{{end}}
+{{if .Status.LogFiles}}
+<div class="overflow-x-auto">
+<table class="table table-sm">
+<thead><tr><th>{{text.LogFilePath}}</th><th>{{text.LogFileStatus}}</th><th>{{text.LogFileContacts}}</th><th>{{text.LogFileOutside}}</th><th>{{text.LogFileLastRead}}</th><th></th></tr></thead>
+<tbody>
+{{$token := .FormToken}}{{range .Status.LogFiles}}<tr><td class="min-w-40"><div class="text-sm font-semibold break-all">{{fileName .Path}}</div><div class="text-xs opacity-70 break-all">{{fileFolder .Path}}</div>{{with fileState .State}}<div class="text-sm mt-1">{{.}}</div>{{end}}</td><td class="sm:whitespace-nowrap"><span class="badge {{fileBadge .State}}">{{fileLabel .State}}</span></td><td>{{.Contacts}}</td><td>{{.Outside}}</td><td class="sm:whitespace-nowrap">{{shortTime .LastRead}}</td><td><form method="post" action="/logfiles/remove"><input type="hidden" name="form_token" value="{{$token}}"><input type="hidden" name="path" value="{{.Path}}"><button type="submit" class="btn btn-ghost btn-sm">{{text.LogFileRemoveButton}}</button></form></td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{end}}
+<form method="post" action="/logfiles/choose" class="flex items-center gap-3 flex-wrap">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<button type="submit" class="btn btn-primary"{{if or .Status.ChoosingLogFile .Status.LogFilesFull}} disabled{{end}}>{{text.LogFileAddButton}}</button>
+{{if .Status.ChoosingLogFile}}<span class="text-sm">{{text.LogFileChoosing}}</span>{{else if .Status.LogFilesFull}}<span class="text-sm">{{text.LogFilesFullText}}</span>{{end}}
+</form>
+</div>
+</section>
+{{end}}
+
+{{define "refresh"}}<div id="status">{{template "status" .}}</div>
+<div id="log-files">{{template "logfiles" .}}</div>
+<div id="station">{{if .Status.Enrolled}}{{template "station" .}}{{end}}</div>{{end}}

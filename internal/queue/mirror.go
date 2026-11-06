@@ -9,9 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/contact"
 )
+
+const eventPeriodName = "event_period"
 
 // MirrorRow is what the relay knows of the server's copy of a contact.
 type MirrorRow struct {
@@ -177,6 +181,45 @@ func (q *Queue) SetMeta(ctx context.Context, name, value string) error {
 	return nil
 }
 
+// SetEventPeriod remembers the event's dates, so a restart without internet still
+// knows them. They belong to the enrollment, so changing the logger keeps them.
+func (q *Queue) SetEventPeriod(ctx context.Context, start, end time.Time) error {
+	value := start.UTC().Format(time.RFC3339) + "/" + end.UTC().Format(time.RFC3339)
+	current, err := q.Meta(ctx, eventPeriodName)
+	if err != nil || current == value {
+		return err
+	}
+	return q.SetMeta(ctx, eventPeriodName, value)
+}
+
+// EventPeriod returns the event's dates, or false until the relay has learned
+// them from the server.
+func (q *Queue) EventPeriod(ctx context.Context) (start, end time.Time, known bool, err error) {
+	value, err := q.Meta(ctx, eventPeriodName)
+	if err != nil || value == "" {
+		return time.Time{}, time.Time{}, false, err
+	}
+	first, last, found := strings.Cut(value, "/")
+	if !found {
+		return time.Time{}, time.Time{}, false, nil
+	}
+	if start, err = time.Parse(time.RFC3339, first); err != nil {
+		return time.Time{}, time.Time{}, false, nil
+	}
+	if end, err = time.Parse(time.RFC3339, last); err != nil {
+		return time.Time{}, time.Time{}, false, nil
+	}
+	return start, end, true, nil
+}
+
+// ForgetEventPeriod makes a new enrollment wait for its own event's dates.
+func (q *Queue) ForgetEventPeriod(ctx context.Context) error {
+	if _, err := q.db.ExecContext(ctx, `DELETE FROM meta WHERE name = ?`, eventPeriodName); err != nil {
+		return fmt.Errorf("forget event dates: %w", err)
+	}
+	return nil
+}
+
 // Defer holds a server change until its contact's upload is answered. The newest
 // change for a contact replaces any older one.
 func (q *Queue) Defer(ctx context.Context, uuid string, payload []byte) error {
@@ -226,8 +269,8 @@ func (q *Queue) ResetSync(ctx context.Context) error {
 				return fmt.Errorf("reset sync: %w", err)
 			}
 		}
-		// The log's own numbering isn't about the server, so it stays.
-		_, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE name <> ?`, loggerCounterName)
+		// The log's own numbering and the event's dates aren't about the feed, so they stay.
+		_, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE name NOT IN (?, ?)`, loggerCounterName, eventPeriodName)
 		if err != nil {
 			return fmt.Errorf("reset sync: %w", err)
 		}

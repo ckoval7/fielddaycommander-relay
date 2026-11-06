@@ -22,10 +22,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ckoval7/fielddaycommander-relay/internal/api"
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
 )
 
@@ -47,6 +49,11 @@ type Backend interface {
 	Enroll(ctx context.Context, request app.EnrollRequest) error
 	Forget(ctx context.Context) error
 	SetLogger(role, address string, listenOnNetwork bool) error
+	SetN1MM(enabled, onNetwork bool) error
+	ChooseLogFile()
+	RemoveLogFile(path string) error
+	SetStation(name string, override bool) error
+	AskServerAgain()
 }
 
 // Server serves the page.
@@ -65,16 +72,25 @@ func New(backend Backend, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("make form token: %w", err)
 	}
 	pages, err := template.New("").Funcs(template.FuncMap{
-		"senderState": senderStateText,
-		"senderLabel": senderLabelText,
-		"senderBadge": senderBadgeClass,
-		"enrollError": enrollErrorText,
-		"attention":   attentionText,
-		"text":        func() pageText { return pageWords },
-		"shortTime":   shortTime,
-		"qsoTime":     qsoTime,
-		"fingerprint": groupFingerprint,
-		"minutes":     func(d time.Duration) int { return int(d.Abs().Minutes()) },
+		"senderState":     senderStateText,
+		"senderLabel":     senderLabelText,
+		"senderBadge":     senderBadgeClass,
+		"enrollError":     enrollErrorText,
+		"attention":       attentionText,
+		"text":            func() pageText { return pageWords },
+		"shortTime":       shortTime,
+		"qsoTime":         qsoTime,
+		"fingerprint":     groupFingerprint,
+		"fileState":       fileStateText,
+		"fileLabel":       fileLabelText,
+		"fileBadge":       fileBadgeClass,
+		"fileName":        fileName,
+		"fileFolder":      fileFolder,
+		"help":            newHelp,
+		"stationList":     stationList,
+		"stationMissing":  stationMissing,
+		"stationUnlisted": stationUnlisted,
+		"minutes":         func(d time.Duration) int { return int(d.Abs().Minutes()) },
 	}).ParseFS(webFiles, "web/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse pages: %w", err)
@@ -103,6 +119,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /enroll", s.protected(s.enroll))
 	mux.HandleFunc("POST /forget", s.protected(s.forget))
 	mux.HandleFunc("POST /n3fjp", s.protected(s.logger))
+	mux.HandleFunc("POST /n1mm", s.protected(s.n1mm))
+	mux.HandleFunc("POST /station", s.protected(s.station))
+	mux.HandleFunc("POST /logfiles/choose", s.protected(s.chooseLogFile))
+	mux.HandleFunc("POST /logfiles/remove", s.protected(s.removeLogFile))
 	return s.guard(mux)
 }
 
@@ -195,6 +215,21 @@ type view struct {
 	EnrollErr   *app.EnrollError
 	LoggerError bool
 	ActionError bool
+	// StationError is what went wrong choosing a station, in words.
+	StationError string
+	// NewStation is a new station's name that was refused, kept for correcting.
+	NewStation string
+}
+
+// helpView is the wording behind one ? button.
+type helpView struct {
+	// Topic says what the button is about, for those who can't see what's beside it.
+	Topic      string
+	Paragraphs []string
+}
+
+func newHelp(topic string, paragraphs ...string) helpView {
+	return helpView{Topic: topic, Paragraphs: paragraphs}
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data view) {
@@ -213,11 +248,13 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 }
 
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
+	// Someone may have just been told a station was created. The refresh shows it.
+	s.backend.AskServerAgain()
 	s.render(w, r, "index.html", view{})
 }
 
 func (s *Server) statusFragment(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "status", view{})
+	s.render(w, r, "refresh", view{})
 }
 
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +300,89 @@ func (s *Server) logger(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("saving the N3FJP settings failed", "error", err)
 		s.render(w, r, "index.html", view{ActionError: true})
 	}
+}
+
+func (s *Server) n1mm(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend.SetN1MM(r.PostFormValue("enabled") != "", r.PostFormValue("on_network") != ""); err != nil {
+		s.log.Error("saving the N1MM settings failed", "error", err)
+		s.render(w, r, "index.html", view{ActionError: true})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) station(w http.ResponseWriter, r *http.Request) {
+	name := r.PostFormValue("station")
+	created := strings.TrimSpace(r.PostFormValue("new_station"))
+	if created != "" {
+		name = created
+	}
+	err := s.backend.SetStation(name, r.PostFormValue("override") != "")
+	switch {
+	case err == nil:
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	case errors.Is(err, app.ErrBadStation):
+		s.render(w, r, "index.html", view{StationError: pageWords.StationBadName, NewStation: created})
+	case errors.Is(err, app.ErrStationNotAllowed):
+		s.render(w, r, "index.html", view{StationError: pageWords.StationNotAllowed, NewStation: created})
+	default:
+		s.log.Error("saving the station failed", "error", err)
+		s.render(w, r, "index.html", view{ActionError: true})
+	}
+}
+
+func (s *Server) chooseLogFile(w http.ResponseWriter, r *http.Request) {
+	s.backend.ChooseLogFile()
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) removeLogFile(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend.RemoveLogFile(r.PostFormValue("path")); err != nil {
+		s.log.Error("removing a log file failed", "error", err)
+		s.render(w, r, "index.html", view{ActionError: true})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// stationList is what the dropdown offers: the server's stations, and the one picked
+// even if the server doesn't have it yet.
+func stationList(status app.Status) []string {
+	names := make([]string, 0, len(status.Sender.Stations)+1)
+	for _, station := range status.Sender.Stations {
+		names = append(names, station.Name)
+	}
+	if status.Station != "" && !slices.Contains(names, status.Station) {
+		names = append(names, status.Station)
+	}
+	return names
+}
+
+// stationMissing is whether the picked station isn't on the server and this relay
+// can't create it, so contacts would wait until someone does.
+func stationMissing(status app.Status) bool {
+	return stationUnlisted(status) && !status.Sender.CanCreateStations
+}
+
+// stationUnlisted is whether the server has answered and doesn't list the pick.
+func stationUnlisted(status app.Status) bool {
+	if status.Station == "" || !status.Sender.StationsKnown {
+		return false
+	}
+	return !slices.ContainsFunc(status.Sender.Stations, func(station api.Station) bool {
+		return station.Name == status.Station
+	})
+}
+
+// fileName is the last part of a path. Paths are split by hand so a Windows path
+// reads the same on any build.
+func fileName(path string) string {
+	return path[strings.LastIndexAny(path, `\/`)+1:]
+}
+
+// fileFolder is everything before fileName.
+func fileFolder(path string) string {
+	return path[:strings.LastIndexAny(path, `\/`)+1]
 }
 
 func shortTime(when time.Time) string {

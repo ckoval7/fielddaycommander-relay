@@ -15,13 +15,20 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
 	"github.com/ckoval7/fielddaycommander-relay/internal/feed"
+	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
+	"github.com/ckoval7/fielddaycommander-relay/internal/n1mm"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n3fjp"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
@@ -33,6 +40,9 @@ const (
 	queueFile      = "relay.db"
 	attentionLimit = 50
 	defaultN3FJP   = "1000"
+	maxLogFiles    = 16
+	// The server's stations table is this wide.
+	maxStationName = 50
 )
 
 // EnrollFailure says why enrollment didn't work. The status page turns it into words.
@@ -71,6 +81,9 @@ func (e *EnrollError) Unwrap() error { return e.Err }
 const (
 	RoleClient = "client"
 	RoleServer = "server"
+	// RoleOff is for a computer with no N3FJP, whose contacts come from log files.
+	// Nothing writes back to a log file, so the feed doesn't run either.
+	RoleOff = "off"
 )
 
 // ErrBadRole means a role isn't one of the two.
@@ -78,6 +91,15 @@ var ErrBadRole = errors.New("unknown logger role")
 
 // ErrBadLoggerAddress means a logger address isn't a host and port.
 var ErrBadLoggerAddress = errors.New("logger address must be a host and port")
+
+// ErrBadStation means a station name can't be used as one.
+var ErrBadStation = errors.New("station name isn't usable")
+
+// ErrStationNotAllowed means a station isn't on the server, and this relay isn't
+// allowed to create it.
+var ErrStationNotAllowed = errors.New("station isn't on the server")
+
+var errNoFileWindow = errors.New("this build has no file window")
 
 // EnrollRequest is what a person enters to enroll.
 type EnrollRequest struct {
@@ -98,12 +120,29 @@ type Status struct {
 	Sender        sender.Status
 	Source        n3fjp.Status
 	// ServerRole is whether N3FJP PCs connect to the relay.
-	ServerRole      bool
+	ServerRole bool
+	// N3FJPOff is whether the relay has been told there's no N3FJP to reach.
+	N3FJPOff        bool
 	ListenOnNetwork bool
 	N3FJPServer     n3fjp.ServerStatus
 	Feed            feed.Status
 	Counts          queue.Counts
 	Attention       []queue.Attention
+	LogFiles        []logfile.Status
+	// N1MMEnabled is whether the relay listens for N1MM Logger+.
+	N1MMEnabled   bool
+	N1MMOnNetwork bool
+	N1MM          n1mm.Status
+	// ChoosingLogFile is whether the file window is showing.
+	ChoosingLogFile bool
+	// LogFileChooseFailed is whether the last try at choosing a file went wrong.
+	LogFileChooseFailed bool
+	// LogFilesFull is whether the relay is watching as many files as it can.
+	LogFilesFull bool
+	// Station is the station picked for this relay, if any.
+	Station string
+	// StationOverride is whether Station also replaces what contacts name themselves.
+	StationOverride bool
 }
 
 // Config is what New needs.
@@ -112,6 +151,9 @@ type Config struct {
 	Version string
 	Store   secret.Store
 	Log     *slog.Logger
+	// PickLogFile asks the person for a file and returns its location, or "" if they
+	// change their mind.
+	PickLogFile func() (string, error)
 }
 
 // App is the running relay.
@@ -129,6 +171,20 @@ type App struct {
 	source   *n3fjp.Source
 	server   *n3fjp.Server
 	feed     *feed.Syncer
+
+	// Log files stop and start on their own, so changing them doesn't drop N3FJP PCs.
+	files        []*logfile.Watcher
+	filesCancel  context.CancelFunc
+	filesRunning sync.WaitGroup
+	choosing     bool
+
+	// N1MM keeps listening through every other change, since UDP that arrives while
+	// the port is closed is gone. It wakes whichever sender is current.
+	n1mm         *n1mm.Listener
+	n1mmCancel   context.CancelFunc
+	n1mmRunning  sync.WaitGroup
+	wakeTarget   atomic.Pointer[sender.Sender]
+	chooseFailed bool
 }
 
 // New opens the relay's data. Call Run to start it.
@@ -149,6 +205,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.mu.Lock()
 	a.base = ctx
 	a.restartLocked()
+	a.startN1MMLocked()
 	a.mu.Unlock()
 
 	<-ctx.Done()
@@ -156,10 +213,12 @@ func (a *App) Run(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.stopLocked()
+	a.stopN1MMLocked()
 	return a.queue.Close()
 }
 
 func (a *App) stopLocked() {
+	a.stopFilesLocked()
 	if a.cancel != nil {
 		a.cancel()
 		a.running.Wait()
@@ -181,6 +240,7 @@ func (a *App) restartLocked() {
 	var client *api.Client
 	a.sender, client = a.buildSender()
 	a.enrolled = a.sender != nil
+	a.wakeTarget.Store(a.sender)
 
 	var notify func()
 	if a.sender != nil {
@@ -189,14 +249,18 @@ func (a *App) restartLocked() {
 		a.running.Go(func() { running.Run(ctx) })
 	}
 
+	a.startFilesLocked(notify)
+
 	var writer feed.Writer
 	a.source, a.server = nil, nil
-	if a.current.LoggerRole == RoleServer {
+	switch a.current.LoggerRole {
+	case RoleOff:
+	case RoleServer:
 		a.server = n3fjp.NewServer(a.listenAddress(), a.queue, a.queue, notify, a.cfg.Log)
 		writer = a.server
 		running := a.server
 		a.running.Go(func() { running.Run(ctx) })
-	} else {
+	default:
 		address := a.current.LoggerAddress
 		if address == "" {
 			address = n3fjp.DefaultAddress
@@ -208,10 +272,83 @@ func (a *App) restartLocked() {
 	}
 
 	a.feed = nil
-	if client != nil {
+	if client != nil && writer != nil {
 		a.feed = feed.New(a.queue, client, writer, a.cfg.Log)
 		running := a.feed
 		a.running.Go(func() { running.Run(ctx) })
+	}
+}
+
+func (a *App) startN1MMLocked() {
+	a.n1mm = nil
+	if !a.current.N1MMEnabled {
+		return
+	}
+	address := n1mm.LocalAddress
+	if a.current.N1MMOnNetwork {
+		address = n1mm.NetworkAddress
+	}
+	ctx, cancel := context.WithCancel(a.base)
+	a.n1mmCancel = cancel
+	listener := n1mm.New(address, a.queue, a.wakeSender, a.cfg.Log)
+	a.n1mm = listener
+	a.n1mmRunning.Go(func() { listener.Run(ctx) })
+}
+
+func (a *App) stopN1MMLocked() {
+	if a.n1mmCancel != nil {
+		a.n1mmCancel()
+		a.n1mmRunning.Wait()
+		a.n1mmCancel = nil
+	}
+}
+
+func (a *App) wakeSender() {
+	if current := a.wakeTarget.Load(); current != nil {
+		current.Wake()
+	}
+}
+
+// SetN1MM saves whether to listen for N1MM Logger+, and whether other PCs can reach
+// the listener. Saving what's already set changes nothing.
+func (a *App) SetN1MM(enabled, onNetwork bool) error {
+	onNetwork = onNetwork && enabled
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if enabled == a.current.N1MMEnabled && onNetwork == a.current.N1MMOnNetwork {
+		return nil
+	}
+	next := a.current
+	next.N1MMEnabled, next.N1MMOnNetwork = enabled, onNetwork
+	if err := settings.Save(a.cfg.DataDir, next); err != nil {
+		return err
+	}
+	a.current = next
+
+	a.stopN1MMLocked()
+	if a.base != nil && a.base.Err() == nil {
+		a.startN1MMLocked()
+	}
+	return nil
+}
+
+func (a *App) startFilesLocked(notify func()) {
+	ctx, cancel := context.WithCancel(a.base)
+	a.filesCancel = cancel
+	a.files = nil
+	for _, path := range a.current.LogFiles {
+		watcher := logfile.New(path, a.queue, notify, a.cfg.Log)
+		a.files = append(a.files, watcher)
+		a.filesRunning.Go(func() { watcher.Run(ctx) })
+	}
+}
+
+func (a *App) stopFilesLocked() {
+	if a.filesCancel != nil {
+		a.filesCancel()
+		a.filesRunning.Wait()
+		a.filesCancel = nil
 	}
 }
 
@@ -245,7 +382,9 @@ func (a *App) buildSender() (*sender.Sender, *api.Client) {
 		a.cfg.Log.Error("saved server address is unusable", "error", err)
 		return nil, nil
 	}
-	return sender.New(a.queue, client, a.cfg.Version, a.cfg.Log), client
+	created := sender.New(a.queue, client, a.cfg.Version, a.cfg.Log)
+	created.SetStation(a.stationChoiceLocked())
+	return created, client
 }
 
 // Enroll trades a one-time code for a token, stores it and starts sending.
@@ -281,12 +420,17 @@ func (a *App) Enroll(ctx context.Context, request EnrollRequest) error {
 	next.ServerURL = serverURL
 	next.PinSHA256 = hex.EncodeToString(pin)
 	next.RelayName = enrolled.Relay.Name
+	// Stations belong to an event, and a new enrollment can mean another one.
+	next.Station, next.StationOverride = "", false
 	if err := settings.Save(a.cfg.DataDir, next); err != nil {
 		return &EnrollError{Failure: FailSave, Err: err}
 	}
 	// A new enrollment can mean another server or event, so the feed starts over.
 	// Contacts the logger already has are recognized by their keys.
 	if err := a.queue.ResetSync(ctx); err != nil {
+		return &EnrollError{Failure: FailSave, Err: err}
+	}
+	if err := a.queue.ForgetEventPeriod(ctx); err != nil {
 		return &EnrollError{Failure: FailSave, Err: err}
 	}
 	a.current = next
@@ -344,6 +488,7 @@ func (a *App) Forget(ctx context.Context) error {
 	next.ServerURL = ""
 	next.PinSHA256 = ""
 	next.RelayName = ""
+	next.Station, next.StationOverride = "", false
 	if err := settings.Save(a.cfg.DataDir, next); err != nil {
 		return err
 	}
@@ -351,6 +496,9 @@ func (a *App) Forget(ctx context.Context) error {
 		return err
 	}
 	if err := a.queue.ResetSync(ctx); err != nil {
+		return err
+	}
+	if err := a.queue.ForgetEventPeriod(ctx); err != nil {
 		return err
 	}
 	a.current = next
@@ -362,7 +510,7 @@ func (a *App) Forget(ctx context.Context) error {
 // empty means this computer and a port is optional, or as the N3FJP server.
 // Saving what's already set changes nothing, so it doesn't drop any connections.
 func (a *App) SetLogger(role, address string, listenOnNetwork bool) error {
-	if role != RoleServer && role != RoleClient {
+	if role != RoleServer && role != RoleClient && role != RoleOff {
 		return ErrBadRole
 	}
 	normalized, err := normalizeLoggerAddress(address)
@@ -376,11 +524,14 @@ func (a *App) SetLogger(role, address string, listenOnNetwork bool) error {
 	next.LoggerAddress = normalized
 	next.LoggerRole = ""
 	next.ListenOnNetwork = false
-	if role == RoleServer {
+	switch role {
+	case RoleServer:
 		next.LoggerRole = RoleServer
 		next.ListenOnNetwork = listenOnNetwork
+	case RoleOff:
+		next.LoggerRole = RoleOff
 	}
-	if next == a.current {
+	if reflect.DeepEqual(next, a.current) {
 		return nil
 	}
 
@@ -396,6 +547,140 @@ func (a *App) SetLogger(role, address string, listenOnNetwork bool) error {
 	}
 	a.current = next
 	a.restartLocked()
+	return nil
+}
+
+// SetStation saves the station this relay is set up for, where empty means the
+// server uses the relay's name, and whether it replaces what contacts name
+// themselves. A name the server doesn't list needs permission to create it, and
+// the server creates it with the first contact sent for it. Saving what's already
+// set changes nothing.
+func (a *App) SetStation(name string, override bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	name, err := a.usableStationLocked(strings.TrimSpace(name))
+	if err != nil {
+		return err
+	}
+	override = override && name != ""
+	if name == a.current.Station && override == a.current.StationOverride {
+		return nil
+	}
+
+	next := a.current
+	next.Station, next.StationOverride = name, override
+	if err := settings.Save(a.cfg.DataDir, next); err != nil {
+		return err
+	}
+	a.current = next
+
+	if a.sender != nil {
+		a.sender.SetStation(a.stationChoiceLocked())
+		// The contacts would go out anyway once their delay ends.
+		if err := a.queue.RetryWaitingForStation(context.Background()); err != nil {
+			a.cfg.Log.Error("retrying contacts waiting for a station failed", "error", err)
+		}
+		a.sender.Wake()
+	}
+	return nil
+}
+
+// usableStationLocked checks a name against what the server last said, and returns
+// it as the server spells it. The server matches names and hostnames in any case.
+func (a *App) usableStationLocked(name string) (string, error) {
+	if name == "" || name == a.current.Station {
+		return name, nil
+	}
+	if utf8.RuneCountInString(name) > maxStationName || strings.ContainsFunc(name, unicode.IsControl) {
+		return "", ErrBadStation
+	}
+	if a.sender == nil {
+		return "", ErrStationNotAllowed
+	}
+	known := a.sender.Status()
+	for _, station := range known.Stations {
+		if strings.EqualFold(station.Name, name) || (station.Hostname != nil && strings.EqualFold(*station.Hostname, name)) {
+			return station.Name, nil
+		}
+	}
+	if !known.CanCreateStations {
+		return "", ErrStationNotAllowed
+	}
+	return name, nil
+}
+
+func (a *App) stationChoiceLocked() sender.StationChoice {
+	return sender.StationChoice{Name: a.current.Station, Override: a.current.StationOverride}
+}
+
+// AskServerAgain gets the server's stations again, for someone opening the page.
+func (a *App) AskServerAgain() {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.sender != nil {
+		a.sender.AskServerAgain()
+	}
+}
+
+// ChooseLogFile shows the file window, unless it's already showing. The person may
+// take their time, so this doesn't wait: Status reports how it went.
+func (a *App) ChooseLogFile() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.choosing || len(a.current.LogFiles) >= maxLogFiles {
+		return
+	}
+	a.choosing, a.chooseFailed = true, false
+	go a.chooseLogFile()
+}
+
+func (a *App) chooseLogFile() {
+	err := errNoFileWindow
+	var path string
+	if a.cfg.PickLogFile != nil {
+		path, err = a.cfg.PickLogFile()
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.choosing = false
+	if err == nil && path != "" && !slices.Contains(a.current.LogFiles, path) {
+		err = a.setLogFilesLocked(append(slices.Clone(a.current.LogFiles), path))
+	}
+	if err != nil {
+		a.cfg.Log.Error("choosing a log file failed", "error", err)
+		a.chooseFailed = true
+	}
+}
+
+// RemoveLogFile stops watching a file. Contacts already read from it stay.
+func (a *App) RemoveLogFile(path string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !slices.Contains(a.current.LogFiles, path) {
+		return nil
+	}
+	return a.setLogFilesLocked(slices.DeleteFunc(slices.Clone(a.current.LogFiles), func(other string) bool { return other == path }))
+}
+
+// setLogFilesLocked changes the watched files. N3FJP keeps running meanwhile.
+func (a *App) setLogFilesLocked(paths []string) error {
+	next := a.current
+	next.LogFiles = paths
+	if err := settings.Save(a.cfg.DataDir, next); err != nil {
+		return err
+	}
+	a.current = next
+
+	a.stopFilesLocked()
+	if a.base != nil && a.base.Err() == nil {
+		var notify func()
+		if a.sender != nil {
+			notify = a.sender.Wake
+		}
+		a.startFilesLocked(notify)
+	}
 	return nil
 }
 
@@ -417,6 +702,21 @@ func (a *App) Status(ctx context.Context) (Status, error) {
 		status.Sender = a.sender.Status()
 	}
 	status.ServerRole = a.current.LoggerRole == RoleServer
+	status.N3FJPOff = a.current.LoggerRole == RoleOff
+	status.N1MMEnabled = a.current.N1MMEnabled
+	status.N1MMOnNetwork = a.current.N1MMOnNetwork
+	if a.n1mm != nil {
+		status.N1MM = a.n1mm.Status()
+	}
+	status.ChoosingLogFile = a.choosing
+	status.LogFileChooseFailed = a.chooseFailed
+	status.LogFilesFull = len(a.current.LogFiles) >= maxLogFiles
+	status.Station = a.current.Station
+	status.StationOverride = a.current.StationOverride
+	choice := a.stationChoiceLocked()
+	for _, watcher := range a.files {
+		status.LogFiles = append(status.LogFiles, watcher.Status())
+	}
 	status.ListenOnNetwork = a.current.ListenOnNetwork
 	if a.source != nil {
 		status.Source = a.source.Status()
@@ -438,6 +738,15 @@ func (a *App) Status(ctx context.Context) (Status, error) {
 	}
 	if status.Attention, err = a.queue.NeedingAttention(queryCtx, attentionLimit); err != nil {
 		return status, err
+	}
+	// A contact still waiting goes out with the current station, so show that name:
+	// it's the one someone would have to create. The server's default is the relay's.
+	for i := range status.Attention {
+		if item := &status.Attention[i]; !item.Rejected {
+			if item.Station = choice.For(item.Station); item.Station == "" {
+				item.Station = status.RelayName
+			}
+		}
 	}
 	return status, nil
 }
