@@ -15,11 +15,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
 	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n1mm"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n3fjp"
@@ -48,6 +50,10 @@ type fakeBackend struct {
 	stationSet int
 	stationErr error
 	asked      int
+
+	startup    autostart.Status
+	startupSet []bool
+	startupErr error
 }
 
 func (f *fakeBackend) Status(context.Context) (app.Status, error) { return f.status, nil }
@@ -76,6 +82,12 @@ func (f *fakeBackend) ChooseLogFile()  { f.choosing++ }
 func (f *fakeBackend) RemoveLogFile(path string) error {
 	f.removed = append(f.removed, path)
 	return f.removeErr
+}
+
+func (f *fakeBackend) StartAtLogin() autostart.Status { return f.startup }
+func (f *fakeBackend) SetStartAtLogin(on bool) error {
+	f.startupSet = append(f.startupSet, on)
+	return f.startupErr
 }
 
 const testHost = "127.0.0.1:17311"
@@ -376,6 +388,73 @@ func TestABadLoggerAddressIsExplained(t *testing.T) {
 	backend.loggerErr = nil
 	if got := post(server, "/n3fjp", form, nil).Code; got != http.StatusSeeOther {
 		t.Errorf("good address: %d", got)
+	}
+}
+
+func TestStartingAtSignInCanBeChosen(t *testing.T) {
+	backend := &fakeBackend{}
+	server := newServer(t, backend)
+
+	on := url.Values{"form_token": {server.formToken}, "start_at_login": {"on"}}
+	if got := post(server, "/startup", on, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("turning on: %d", got)
+	}
+	off := url.Values{"form_token": {server.formToken}}
+	if got := post(server, "/startup", off, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("turning off: %d", got)
+	}
+	if want := []bool{true, false}; !slices.Equal(backend.startupSet, want) {
+		t.Errorf("got %v, want %v", backend.startupSet, want)
+	}
+	if got := post(server, "/startup", url.Values{"start_at_login": {"on"}}, nil).Code; got != http.StatusForbidden {
+		t.Errorf("no token: %d", got)
+	}
+	if len(backend.startupSet) != 2 {
+		t.Error("a request without the token changed something")
+	}
+}
+
+func TestAFailedStartupChoiceSaysSo(t *testing.T) {
+	backend := &fakeBackend{startupErr: errors.New("no access")}
+	server := newServer(t, backend)
+	form := url.Values{"form_token": {server.formToken}, "start_at_login": {"on"}}
+
+	body := html.UnescapeString(post(server, "/startup", form, nil).Body.String())
+	if !strings.Contains(body, pageWords.ActionError) {
+		t.Error("the page doesn't say the change failed")
+	}
+}
+
+func TestThePageShowsWhatTheNextSignInWillDo(t *testing.T) {
+	checkbox := regexp.MustCompile(`<input[^>]*name="start_at_login"[^>]*>`)
+	other := `C:\Old Copyelay.exe`
+	tests := []struct {
+		name    string
+		status  autostart.Status
+		offered bool
+		checked bool
+		text    string
+	}{
+		{name: "this build can't", status: autostart.Status{}},
+		{name: "off", status: autostart.Status{Available: true}, offered: true},
+		{name: "on", status: autostart.Status{Available: true, On: true}, offered: true, checked: true},
+		{name: "another copy", status: autostart.Status{Available: true, OtherCopy: other}, offered: true, text: fmt.Sprintf(pageWords.StartAtLoginOtherCopy, other)},
+		{name: "turned off in Windows", status: autostart.Status{Available: true, TurnedOffInWindows: true}, offered: true, text: pageWords.StartAtLoginTurnedOff},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := html.UnescapeString(get(newServer(t, &fakeBackend{startup: tt.status}), "/").Body.String())
+			box := checkbox.FindString(body)
+			if (box != "") != tt.offered {
+				t.Fatalf("offered = %v, want %v", box != "", tt.offered)
+			}
+			if strings.Contains(box, " checked") != tt.checked {
+				t.Errorf("checkbox: %s", box)
+			}
+			if tt.text != "" && !strings.Contains(body, tt.text) {
+				t.Errorf("missing %q", tt.text)
+			}
+		})
 	}
 }
 

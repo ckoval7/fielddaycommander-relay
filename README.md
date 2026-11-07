@@ -4,11 +4,11 @@ Field Day Commander Relay is a desktop program for ham radio clubs using [Field 
 
 ## Project status
 
-This is early software. There isn't an installer, start-at-login support, or a published release yet. Neither N3FJP role has been run against real N3FJP software yet.
+This is early software. There isn't a published release yet. Neither N3FJP role has been run against real N3FJP software yet.
 
 The relay needs Field Day Commander's relay support, which isn't in a Field Day Commander release yet. The Relays page and relay API are on the unmerged `feature/relay-api` branch. The Get started steps below won't work against a current Field Day Commander release.
 
-Windows binaries aren't available yet. They will come from [GitHub Actions build artifacts](https://github.com/ckoval7/fielddaycommander-relay/actions/workflows/build.yml) built from `main` and release tags. You need Windows 10 or later. Enrollment requires the Windows keychain. Linux builds compile, but can't enroll yet.
+[GitHub Actions build artifacts](https://github.com/ckoval7/fielddaycommander-relay/actions/workflows/build.yml) from `main` and release tags include both `relay-setup.exe` and `relay-portable.exe` for Windows. You need 64-bit Windows 10 or later. Enrollment requires the Windows keychain. Linux builds compile, but can't enroll yet.
 
 ## What it helps with
 
@@ -23,6 +23,28 @@ The relay connects to the server using outbound HTTPS or WSS connections, so it 
 | N1MM Logger+ | Contact broadcasts | One-way to the server, including edits and deletes |
 
 ADIF collection needs an initial server connection to learn the event's dates. After that, it can continue offline. N3FJP file share mode isn't supported. In N3FJP server role, closing the relay stops logging until you start it again.
+
+## Install on Windows
+
+Choose `relay-setup.exe` for your club's regular logging PC, or `relay-portable.exe` for a borrowed PC or one where you can't or don't want to install anything. Download either from this project's GitHub build artifacts. Neither version is code signed yet, so Windows SmartScreen may warn. To go ahead, click **More info**, then **Run anyway**, only for a file from this project's GitHub build.
+
+Run `relay-setup.exe` to install.
+
+It installs for your Windows account in `AppData\Local\Programs`, without administrator rights or a folder choice. It adds a Start menu shortcut and an entry in Windows' Apps list. On the last page, **Start the relay now** is checked. **Start the relay when I sign in to Windows** is unchecked, or hidden if this install already starts at sign-in.
+
+To update, run the new installer. It asks before closing a running relay cleanly. Saved contacts and your server connection are kept. Contacts your loggers send while it's closed may need sending again. N1MM broadcasts are lost while it's closed.
+
+Uninstall from Windows' Apps list. This removes the program, shortcut, and this install's start-at-sign-in entry. Collected contacts, settings, and the connection token stay on the computer. To remove the token too, click **Disconnect** on the status page before uninstalling. The installer doesn't open firewall ports. Windows may still ask for permission when you turn on network options.
+
+For the portable version, put `relay-portable.exe` in a folder you can write to and run it. It needs no install and doesn't add a Start menu shortcut or Apps list entry. It doesn't offer start at sign-in, and the status page hides that option.
+
+Contacts, settings, and logs are saved in `relay-data` beside the program. Move or back up the program together with that folder. If the folder can't be written, the relay uses the installed version's usual data folder in AppData so it can still collect contacts, and notes this in `relay.log`.
+
+The connection token stays in that PC's Windows keychain. The relay never writes it to a file, so it doesn't travel with the folder. On a different PC or Windows account, the status page asks for a new enrollment code. Queued contacts are kept and go out after connecting. Each portable folder has its own token, separate from the installed version's and other portable folders' tokens on the PC. To remove the token from a PC, click **Disconnect** before removing the program.
+
+To remove the portable version, check that **Waiting** is zero, then delete the program and `relay-data`. Unsent contacts are in that folder.
+
+Only one relay can run per computer, whichever version, because logger ports belong to the whole computer. Starting it again opens the running relay's status page, and the new copy stops. If another Windows account's relay is running on this PC, yours won't run. A portable copy and an installed copy don't share contacts or settings, except when the portable copy falls back to the usual AppData folder.
 
 ## Get started
 
@@ -39,10 +61,13 @@ Use Go 1.27.3, as specified in `go.mod`. The stylesheet is committed, so a plain
 
 ```sh
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H=windowsgui" -o relay.exe ./cmd/relay
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H=windowsgui -X main.portable=true" -o relay-portable.exe ./cmd/relay
 go test ./...
 ```
 
 Keep `CGO_ENABLED=0` for release builds. The tests run for your host platform. `scripts/go.sh` is also available for running Go in a container.
+
+To build the installer, first build the Windows program as `dist/relay.exe`. Then run `scripts/build-installer.sh` to create `dist/relay-setup.exe`, using NSIS's `makensis` if installed, or a container otherwise.
 
 Branch flow: feature branch → `dev` → `main`.
 

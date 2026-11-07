@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -38,6 +40,11 @@ const (
 
 	menuOpen = 1
 	menuQuit = 2
+
+	// At sign-in the taskbar can be too busy to take an icon, and a relay with no
+	// icon is hard to find or quit, so it's worth waiting a while.
+	addRetryEvery = 2 * time.Second
+	addPatience   = 2 * time.Minute
 )
 
 var (
@@ -121,6 +128,7 @@ type icon struct {
 	window    uintptr
 	data      notifyIconData
 	restarted uintptr
+	added     atomic.Bool
 }
 
 var (
@@ -149,7 +157,7 @@ func Run(ctx context.Context, options Options) error {
 	}()
 
 	instance, _, _ := getModuleHandle.Call(0)
-	className, err := syscall.UTF16PtrFromString("FieldDayCommanderRelayTray")
+	className, err := syscall.UTF16PtrFromString(WindowClass)
 	if err != nil {
 		return err
 	}
@@ -185,15 +193,17 @@ func Run(ctx context.Context, options Options) error {
 	if tip, err := syscall.UTF16FromString(options.Tooltip); err == nil {
 		copy(state.data.Tip[:len(state.data.Tip)-1], tip)
 	}
-	if err := state.add(); err != nil {
-		_, _, _ = destroyWindow.Call(state.window)
-		return err
-	}
-
 	stop := context.AfterFunc(ctx, func() {
 		_, _, _ = postMessage.Call(state.window, wmClose, 0, 0)
 	})
 	defer stop()
+
+	retries, stopRetries := context.WithCancel(ctx)
+	defer stopRetries()
+	gaveUp := make(chan error, 1)
+	if err := state.add(); err != nil {
+		go state.keepAdding(retries, err, gaveUp)
+	}
 
 	var incoming message
 	for {
@@ -202,7 +212,12 @@ func Run(ctx context.Context, options Options) error {
 		case -1:
 			return fmt.Errorf("tray message loop: %w", callErr)
 		case 0:
-			return nil
+			select {
+			case err := <-gaveUp:
+				return err
+			default:
+				return nil
+			}
 		}
 		_, _, _ = translateMessage.Call(uintptr(unsafe.Pointer(&incoming)))
 		_, _, _ = dispatchMessage.Call(uintptr(unsafe.Pointer(&incoming)))
@@ -228,7 +243,36 @@ func (i *icon) add() error {
 	if result, _, callErr := shellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&i.data))); result == 0 {
 		return fmt.Errorf("add tray icon: %w", callErr)
 	}
+	i.added.Store(true)
 	return nil
+}
+
+// keepAdding tries again until the icon is up, which may also happen when Explorer
+// announces the taskbar. If that never happens it closes the window so Run returns
+// the error, and the relay carries on without an icon.
+func (i *icon) keepAdding(ctx context.Context, err error, gaveUp chan<- error) {
+	ticker := time.NewTicker(addRetryEvery)
+	defer ticker.Stop()
+	deadline := time.After(addPatience)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			if !i.added.Load() {
+				gaveUp <- err
+				_, _, _ = postMessage.Call(i.window, wmClose, 0, 0)
+			}
+			return
+		case <-ticker.C:
+			if i.added.Load() {
+				return
+			}
+			if err = i.add(); err == nil {
+				return
+			}
+		}
+	}
 }
 
 func windowProc(window uintptr, kind uint32, wParam, lParam uintptr) uintptr {

@@ -7,7 +7,7 @@ description: Use this skill to release Field Day Commander Relay. Triggers inclu
 
 Run the steps in order, and don't bump the version early. Relay versions are independent of the app's.
 
-Packaging and code signing aren't set up yet. When they are, add them here. Don't improvise them during a release.
+The build workflow makes both Windows versions with each build: the installer (`scripts/build-installer.sh`, `installer/relay.nsi`) and `relay-portable.exe`. Code signing isn't set up yet, so Windows warns about the installer. When signing is set up, add it here. Don't improvise it during a release.
 
 The `branch-workflow` skill has the `gorun` helper and the merge rules.
 
@@ -33,6 +33,8 @@ docker run --rm -v "$PWD":/project:ro aquasec/trivy:latest fs --scanners vuln --
 ```
 
 Upgrade the affected module and re-scan. Commit as `fix(deps): upgrade <module> to <ver> (<CVE or GHSA id>)`.
+
+Then run the Sonar scan in `branch-workflow` and fix what it finds in the same way, until it shows no issues or hotspots.
 
 ## 2. Update dependencies
 
