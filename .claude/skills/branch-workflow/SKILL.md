@@ -18,6 +18,12 @@ Work flows **feature branch → `dev` → `main`**.
 2. Never merge anything but `dev` into `main`, and only as part of a release (see the `release` skill). Never merge `main` into `dev`.
 3. **Never push and never offer to push.** Commits, merges and tags stay local, and the user pushes when they're ready. Never rewrite the history of `dev` or `main`.
 
+## GitHub protection
+
+`.github/rulesets/main.json` and `dev.json` define the rulesets: no deletion, no force-push and changes by PR. Repo admins bypass them, which is how the user's pushes to `dev` and `main` still work. `main` also requires `SonarCloud Code Analysis`, pinned to the app's integration id 12526 so nothing else can post a passing check under that name. `dev` doesn't, because scans only run on PRs into `main`.
+
+To change a ruleset, edit its file, find its id with `gh api repos/ckoval7/fielddaycommander-relay/rulesets`, and `PUT` the file to `.../rulesets/<id>`.
+
 ## Merging a feature branch into dev
 
 Run the full checks on the branch first and fix what fails, including flaky tests they turn up. Then count the branch's commits. More than one: squash. Exactly one: a regular merge.
