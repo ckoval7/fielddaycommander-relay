@@ -7,4 +7,8 @@ package instance
 
 // acquire always succeeds. Other systems only have the check for a relay already
 // answering on the status page's port.
-func acquire(string) (func(), error) { return func() {}, nil }
+func acquire(string) (func(), error) {
+	return func() {
+		// Nothing was claimed, so there's nothing to release.
+	}, nil
+}
