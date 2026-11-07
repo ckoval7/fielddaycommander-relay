@@ -220,7 +220,7 @@ func pageURL(port int) string {
 func openBrowser(url string, log *slog.Logger) {
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" {
-		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		command = exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "rundll32.exe"), "url.dll,FileProtocolHandler", url)
 	} else {
 		command = exec.Command("xdg-open", url)
 	}

@@ -93,64 +93,69 @@ func (s *Syncer) Status() Status {
 	return s.status
 }
 
+// followState is what Run carries from one turn to the next.
+type followState struct {
+	failures  int
+	available bool
+}
+
 // Run follows the feed until ctx is canceled.
 func (s *Syncer) Run(ctx context.Context) {
-	failures := 0
-	available := false
-
+	var state followState
 	for ctx.Err() == nil {
-		if !available {
-			handshake, err := s.client.Handshake(ctx)
-			if err != nil {
-				failures++
-				if !sleep(ctx, backoff.Wait(failures, s.minWait, s.maxWait)) {
-					return
-				}
-				continue
-			}
-			failures = 0
-			available = handshake.Capabilities.ContactFeed
-			s.setStatus(func(status *Status) { status.Available = available })
-			if !available {
-				// An older server: uploading still works without the feed.
-				if !sleep(ctx, s.recheck) {
-					return
-				}
-				continue
-			}
-		}
-
-		// The source reads the logger's log first, so contacts in both places are
-		// recognized and not written twice.
-		if !s.writer.Ready() {
-			if !sleep(ctx, s.poll) {
-				return
-			}
-			continue
-		}
-
-		more, err := s.step(ctx)
-		switch {
-		case err == nil:
-			failures = 0
-			s.setStatus(func(status *Status) { status.LastSync = time.Now() })
-			if more {
-				continue
-			}
-			if !sleep(ctx, s.poll) {
-				return
-			}
-		case ctx.Err() != nil:
+		if wait := s.follow(ctx, &state); wait > 0 && !sleep(ctx, wait) {
 			return
-		default:
-			s.log.Warn("following the server's contacts failed", "error", err)
-			failures++
-			available = false
-			if !sleep(ctx, backoff.Wait(failures, s.minWait, s.maxWait)) {
-				return
-			}
 		}
 	}
+}
+
+// follow takes one turn and returns how long to wait before the next.
+func (s *Syncer) follow(ctx context.Context, state *followState) time.Duration {
+	if !state.available {
+		wait := s.findFeed(ctx, state)
+		if !state.available {
+			return wait
+		}
+	}
+
+	// The source reads the logger's log first, so contacts in both places are
+	// recognized and not written twice.
+	if !s.writer.Ready() {
+		return s.poll
+	}
+
+	more, err := s.step(ctx)
+	switch {
+	case err == nil:
+		state.failures = 0
+		s.setStatus(func(status *Status) { status.LastSync = time.Now() })
+		if more {
+			return 0
+		}
+		return s.poll
+	case ctx.Err() != nil:
+		return 0
+	default:
+		s.log.Warn("following the server's contacts failed", "error", err)
+		state.failures++
+		state.available = false
+		return backoff.Wait(state.failures, s.minWait, s.maxWait)
+	}
+}
+
+// findFeed asks whether the server offers the feed, and returns how long to wait
+// if it can't be used yet.
+func (s *Syncer) findFeed(ctx context.Context, state *followState) time.Duration {
+	handshake, err := s.client.Handshake(ctx)
+	if err != nil {
+		state.failures++
+		return backoff.Wait(state.failures, s.minWait, s.maxWait)
+	}
+	state.failures = 0
+	state.available = handshake.Capabilities.ContactFeed
+	s.setStatus(func(status *Status) { status.Available = state.available })
+	// An older server: uploading still works without the feed.
+	return s.recheck
 }
 
 func (s *Syncer) step(ctx context.Context) (bool, error) {

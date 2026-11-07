@@ -791,3 +791,43 @@ func TestN1MMStartsOnlyWhenAskedAndSurvivesOtherChanges(t *testing.T) {
 		t.Errorf("status = %+v", status)
 	}
 }
+
+// Changing a setting while nothing is running saves it and starts nothing, so a
+// page still open as the relay closes can't leave a listener running.
+func TestNothingStartsBeforeRunOrAfterItEnds(t *testing.T) {
+	a, err := New(Config{DataDir: t.TempDir(), Version: "26.11.1", Store: &memoryStore{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listening := func() bool {
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		return a.n1mmCancel != nil
+	}
+
+	if err := a.SetN1MM(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if listening() {
+		t.Error("N1MM started before Run")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	eventually(t, "N1MM to start", listening)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetN1MM(false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetN1MM(true, false); err != nil {
+		t.Fatal(err)
+	}
+	if listening() {
+		t.Error("N1MM started after Run ended")
+	}
+}

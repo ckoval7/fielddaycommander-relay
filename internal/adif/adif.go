@@ -96,29 +96,9 @@ func parseTag(data []byte, offset int) (tag, bool) {
 	parsed := tag{name: strings.ToUpper(string(data[nameStart:at]))}
 
 	if data[at] == ':' {
-		at++
-		digitsStart := at
-		for at < len(data) && data[at] >= '0' && data[at] <= '9' {
-			// Stop counting once it's past any length that gets followed.
-			if parsed.length <= maxDeclared {
-				parsed.length = parsed.length*10 + int(data[at]-'0')
-			}
-			at++
-		}
-		if at == digitsStart || at >= len(data) {
+		var ok bool
+		if at, ok = parseLength(data, at+1, &parsed); !ok {
 			return tag{}, false
-		}
-		parsed.hasLength = true
-
-		if data[at] == ':' {
-			at++
-			if at >= len(data) || !isLetter(data[at]) {
-				return tag{}, false
-			}
-			at++
-			if at >= len(data) {
-				return tag{}, false
-			}
 		}
 	}
 
@@ -127,6 +107,35 @@ func parseTag(data []byte, offset int) (tag, bool) {
 	}
 	parsed.end = at + 1
 	return parsed, true
+}
+
+// parseLength reads the LEN or LEN:T of a tag at offset, and returns the offset
+// just after it, which is inside the data.
+func parseLength(data []byte, offset int, parsed *tag) (int, bool) {
+	at := offset
+	for at < len(data) && data[at] >= '0' && data[at] <= '9' {
+		// Stop counting once it's past any length that gets followed.
+		if parsed.length <= maxDeclared {
+			parsed.length = parsed.length*10 + int(data[at]-'0')
+		}
+		at++
+	}
+	if at == offset || at >= len(data) {
+		return 0, false
+	}
+	parsed.hasLength = true
+
+	if data[at] == ':' {
+		at++
+		if at >= len(data) || !isLetter(data[at]) {
+			return 0, false
+		}
+		at++
+		if at >= len(data) {
+			return 0, false
+		}
+	}
+	return at, true
 }
 
 // readValue returns the value starting at start and the offset just after it.

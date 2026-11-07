@@ -164,13 +164,15 @@ type App struct {
 	mu       sync.RWMutex
 	current  settings.Settings
 	enrolled bool
-	base     context.Context
-	cancel   context.CancelFunc
-	running  sync.WaitGroup
-	sender   *sender.Sender
-	source   *n3fjp.Source
-	server   *n3fjp.Server
-	feed     *feed.Syncer
+	// alive is whether Run is keeping the parts going. Run cancels them all itself
+	// when it ends, so their contexts don't need to come from its own.
+	alive   bool
+	cancel  context.CancelFunc
+	running sync.WaitGroup
+	sender  *sender.Sender
+	source  *n3fjp.Source
+	server  *n3fjp.Server
+	feed    *feed.Syncer
 
 	// Log files stop and start on their own, so changing them doesn't drop N3FJP PCs.
 	files        []*logfile.Watcher
@@ -203,7 +205,7 @@ func New(cfg Config) (*App, error) {
 // Run keeps the relay working until ctx is canceled, then closes its data.
 func (a *App) Run(ctx context.Context) error {
 	a.mu.Lock()
-	a.base = ctx
+	a.alive = ctx.Err() == nil
 	a.restartLocked()
 	a.startN1MMLocked()
 	a.mu.Unlock()
@@ -212,6 +214,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.alive = false
 	a.stopLocked()
 	a.stopN1MMLocked()
 	return a.queue.Close()
@@ -231,10 +234,10 @@ func (a *App) stopLocked() {
 // out once it does.
 func (a *App) restartLocked() {
 	a.stopLocked()
-	if a.base == nil || a.base.Err() != nil {
+	if !a.alive {
 		return
 	}
-	ctx, cancel := context.WithCancel(a.base)
+	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 
 	var client *api.Client
@@ -288,7 +291,7 @@ func (a *App) startN1MMLocked() {
 	if a.current.N1MMOnNetwork {
 		address = n1mm.NetworkAddress
 	}
-	ctx, cancel := context.WithCancel(a.base)
+	ctx, cancel := context.WithCancel(context.Background())
 	a.n1mmCancel = cancel
 	listener := n1mm.New(address, a.queue, a.wakeSender, a.cfg.Log)
 	a.n1mm = listener
@@ -327,14 +330,14 @@ func (a *App) SetN1MM(enabled, onNetwork bool) error {
 	a.current = next
 
 	a.stopN1MMLocked()
-	if a.base != nil && a.base.Err() == nil {
+	if a.alive {
 		a.startN1MMLocked()
 	}
 	return nil
 }
 
 func (a *App) startFilesLocked(notify func()) {
-	ctx, cancel := context.WithCancel(a.base)
+	ctx, cancel := context.WithCancel(context.Background())
 	a.filesCancel = cancel
 	a.files = nil
 	for _, path := range a.current.LogFiles {
@@ -674,7 +677,7 @@ func (a *App) setLogFilesLocked(paths []string) error {
 	a.current = next
 
 	a.stopFilesLocked()
-	if a.base != nil && a.base.Err() == nil {
+	if a.alive {
 		var notify func()
 		if a.sender != nil {
 			notify = a.sender.Wake

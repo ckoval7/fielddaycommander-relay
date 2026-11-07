@@ -30,7 +30,7 @@
   }
 
   function apply(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.dataset.theme = theme;
     label(theme);
   }
 
@@ -43,9 +43,9 @@
   });
 
   document.addEventListener('DOMContentLoaded', function () {
-    label(document.documentElement.getAttribute('data-theme'));
+    label(document.documentElement.dataset.theme);
     document.getElementById('theme-toggle')?.addEventListener('click', function () {
-      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       apply(next);
       try {
         localStorage.setItem('theme', next);
