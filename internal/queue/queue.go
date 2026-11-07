@@ -213,10 +213,11 @@ func (q *Queue) Put(ctx context.Context, c contact.Contact) (bool, error) {
 	queued := false
 	err = q.inTx(ctx, func(tx *sql.Tx) error {
 		// Name the contact by uuid when the server has given one, which also
-		// reaches contacts logged elsewhere that have no idempotency key.
+		// reaches contacts logged elsewhere that have no idempotency key. A new
+		// contact's blank ReplacesKey isn't a key, and would match those contacts.
 		if c.UUID == "" {
 			if err := tx.QueryRowContext(ctx,
-				`SELECT uuid FROM mirror WHERE idempotency_key IN (?1, ?2) OR derived_key IN (?1, ?2) LIMIT 1`,
+				`SELECT uuid FROM mirror WHERE idempotency_key IN (?1, NULLIF(?2, '')) OR derived_key IN (?1, NULLIF(?2, '')) LIMIT 1`,
 				c.IdempotencyKey, c.ReplacesKey).Scan(&c.UUID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
