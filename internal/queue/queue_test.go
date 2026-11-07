@@ -367,6 +367,25 @@ func TestAnswersFillInTheMirrorAndLaterUploadsNameTheUUID(t *testing.T) {
 	}
 }
 
+// A contact logged on the server has no idempotency key, and a new contact has no
+// key it replaces. Those two blanks must not count as a match, or the new contact
+// is sent as an edit of the server's contact and overwrites it.
+func TestANewContactDoesNotTakeTheUUIDOfAContactWithNoKey(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+	if err := q.SaveMirror(ctx, MirrorRow{UUID: "logged-on-the-server", DerivedKey: "some-other-key"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SaveMirror(ctx, MirrorRow{UUID: "no-keys-at-all"}); err != nil {
+		t.Fatal(err)
+	}
+
+	put(t, q, normalized(t, "W1AW"))
+	if item := next(t, q)[0]; item.Contact.UUID != "" {
+		t.Errorf("a new contact was sent as an edit of %q", item.Contact.UUID)
+	}
+}
+
 func TestAUUIDDoesNotMakeAContactLookChanged(t *testing.T) {
 	q := open(t)
 	c := normalized(t, "W1AW")
