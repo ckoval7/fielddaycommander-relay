@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Runs the tests with coverage and sends the results to SonarCloud. Automatic
+# analysis can't import coverage and can't run beside this, so it has to stay off
+# in the SonarCloud project settings.
+#
+# Actions are pinned to commit SHAs; the comment names the release.
+name: Tests and SonarCloud
+
+on:
+  push:
+    branches: [main, dev]
+
+permissions: {}
+
+concurrency:
+  group: sonarcloud-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests-and-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # Sonar needs the full history to tell new code from old.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run the tests with coverage
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Send results to SonarCloud
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
