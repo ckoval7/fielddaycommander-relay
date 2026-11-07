@@ -13,7 +13,7 @@ import (
 // the resource were ever missing.
 func TestAMissingIconFallsBackToTheGenericOne(t *testing.T) {
 	for _, resource := range []uintptr{0, 9999} {
-		if loaded := loadTrayIcon(0, resource); loaded == 0 {
+		if loadTrayIcon(0, resource) == 0 {
 			t.Errorf("resource %d: no icon at all", resource)
 		}
 	}

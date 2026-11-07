@@ -31,6 +31,11 @@ import (
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
 )
 
+const (
+	pageTemplate = "index.html"
+	sameOrigin   = "same-origin"
+)
+
 //go:embed web
 var webFiles embed.FS
 
@@ -165,7 +170,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		header.Set("X-Content-Type-Options", "nosniff")
 		// Not no-referrer: with that, browsers send "Origin: null" on this page's own
 		// form posts, and the same-origin check can't tell them from another site's.
-		header.Set("Referrer-Policy", "same-origin")
+		header.Set("Referrer-Policy", sameOrigin)
 		header.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
@@ -188,14 +193,14 @@ func (s *Server) protected(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != sameOrigin && site != "none" {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.PostFormValue("form_token")), []byte(s.formToken)) != 1 {
 			// A tab left open across a relay restart holds the old run's token. It
 			// changes nothing, so send the person back to a fresh page.
-			if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+			if r.Header.Get("Sec-Fetch-Site") == sameOrigin {
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
@@ -250,7 +255,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	// Someone may have just been told a station was created. The refresh shows it.
 	s.backend.AskServerAgain()
-	s.render(w, r, "index.html", view{})
+	s.render(w, r, pageTemplate, view{})
 }
 
 func (s *Server) statusFragment(w http.ResponseWriter, r *http.Request) {
@@ -277,13 +282,13 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	if !errors.As(err, &data.EnrollErr) {
 		data.EnrollErr = &app.EnrollError{Failure: app.FailRefused, Err: err}
 	}
-	s.render(w, r, "index.html", data)
+	s.render(w, r, pageTemplate, data)
 }
 
 func (s *Server) forget(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend.Forget(r.Context()); err != nil {
 		s.log.Error("forgetting the server failed", "error", err)
-		s.render(w, r, "index.html", view{ActionError: true})
+		s.render(w, r, pageTemplate, view{ActionError: true})
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -295,17 +300,17 @@ func (s *Server) logger(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, app.ErrBadLoggerAddress):
-		s.render(w, r, "index.html", view{LoggerError: true})
+		s.render(w, r, pageTemplate, view{LoggerError: true})
 	default:
 		s.log.Error("saving the N3FJP settings failed", "error", err)
-		s.render(w, r, "index.html", view{ActionError: true})
+		s.render(w, r, pageTemplate, view{ActionError: true})
 	}
 }
 
 func (s *Server) n1mm(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend.SetN1MM(r.PostFormValue("enabled") != "", r.PostFormValue("on_network") != ""); err != nil {
 		s.log.Error("saving the N1MM settings failed", "error", err)
-		s.render(w, r, "index.html", view{ActionError: true})
+		s.render(w, r, pageTemplate, view{ActionError: true})
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -322,12 +327,12 @@ func (s *Server) station(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, app.ErrBadStation):
-		s.render(w, r, "index.html", view{StationError: pageWords.StationBadName, NewStation: created})
+		s.render(w, r, pageTemplate, view{StationError: pageWords.StationBadName, NewStation: created})
 	case errors.Is(err, app.ErrStationNotAllowed):
-		s.render(w, r, "index.html", view{StationError: pageWords.StationNotAllowed, NewStation: created})
+		s.render(w, r, pageTemplate, view{StationError: pageWords.StationNotAllowed, NewStation: created})
 	default:
 		s.log.Error("saving the station failed", "error", err)
-		s.render(w, r, "index.html", view{ActionError: true})
+		s.render(w, r, pageTemplate, view{ActionError: true})
 	}
 }
 
@@ -339,7 +344,7 @@ func (s *Server) chooseLogFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeLogFile(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend.RemoveLogFile(r.PostFormValue("path")); err != nil {
 		s.log.Error("removing a log file failed", "error", err)
-		s.render(w, r, "index.html", view{ActionError: true})
+		s.render(w, r, pageTemplate, view{ActionError: true})
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)

@@ -40,7 +40,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run the tests with coverage
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Send results to SonarCloud
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository

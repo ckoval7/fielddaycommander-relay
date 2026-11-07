@@ -437,7 +437,7 @@ func TestAssetsAndHealthAreServed(t *testing.T) {
 			t.Errorf("%s: %d", path, got)
 		}
 	}
-	if got := get(server, "/assets/../index.html").Code; got == http.StatusOK {
+	if get(server, "/assets/../index.html").Code == http.StatusOK {
 		t.Error("escaped the assets folder")
 	}
 }

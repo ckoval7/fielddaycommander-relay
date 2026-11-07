@@ -32,7 +32,7 @@ type MirrorRow struct {
 
 // FindMirror looks a contact up by uuid, then by any of the keys.
 func (q *Queue) FindMirror(ctx context.Context, uuid string, keys ...string) (*MirrorRow, error) {
-	row, err := q.scanMirror(q.db.QueryRowContext(ctx, mirrorSelect+` WHERE uuid = ?`, uuid))
+	row, err := q.scanMirror(q.db.QueryRowContext(ctx, mirrorByUUID, uuid))
 	if row != nil || err != nil {
 		return row, err
 	}
@@ -40,7 +40,7 @@ func (q *Queue) FindMirror(ctx context.Context, uuid string, keys ...string) (*M
 		if key == "" {
 			continue
 		}
-		row, err = q.scanMirror(q.db.QueryRowContext(ctx, mirrorSelect+` WHERE idempotency_key = ?1 OR derived_key = ?1 LIMIT 1`, key))
+		row, err = q.scanMirror(q.db.QueryRowContext(ctx, mirrorByKey, key))
 		if row != nil || err != nil {
 			return row, err
 		}
@@ -48,7 +48,10 @@ func (q *Queue) FindMirror(ctx context.Context, uuid string, keys ...string) (*M
 	return nil, nil
 }
 
-const mirrorSelect = `SELECT uuid, idempotency_key, derived_key, payload, deleted FROM mirror`
+const (
+	mirrorByUUID = `SELECT uuid, idempotency_key, derived_key, payload, deleted FROM mirror WHERE uuid = ?`
+	mirrorByKey  = `SELECT uuid, idempotency_key, derived_key, payload, deleted FROM mirror WHERE idempotency_key = ?1 OR derived_key = ?1 LIMIT 1`
+)
 
 func (q *Queue) scanMirror(found *sql.Row) (*MirrorRow, error) {
 	var (
@@ -264,8 +267,8 @@ func (q *Queue) ClearDeferred(ctx context.Context, uuid string) error {
 // event. The contacts themselves and their upload history stay.
 func (q *Queue) ResetSync(ctx context.Context) error {
 	return q.inTx(ctx, func(tx *sql.Tx) error {
-		for _, table := range []string{"mirror", "deferred"} {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+		for _, statement := range []string{`DELETE FROM mirror`, `DELETE FROM deferred`} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("reset sync: %w", err)
 			}
 		}

@@ -236,36 +236,10 @@ func (w *Watcher) readNew(ctx context.Context) error {
 	}()
 
 	for {
-		data, err := w.readAt(w.offset, w.window)
+		short, isNew, err := w.readWindow(ctx)
+		queued = queued || isNew
 		if err != nil {
 			return err
-		}
-		records, consumed, sawTag := adif.Scan(data)
-		w.sawTag = w.sawTag || sawTag
-
-		found, outside, any, err := w.store(ctx, records)
-		queued = queued || any
-		if err != nil {
-			return err
-		}
-		w.setStatus(func(status *Status) {
-			status.Contacts += found
-			status.Outside += outside
-			if any {
-				status.LastRead = time.Now()
-			}
-		})
-
-		short := len(data) < w.window
-		if consumed == 0 && !short {
-			// A whole window with no end of record is no log the relay can read. Skip
-			// it so the rest of the file still gets read.
-			w.log.Warn("skipping text in a log file with no record end", "path", w.path, "offset", w.offset)
-			consumed = len(data)
-		}
-		if consumed > 0 {
-			w.offset += int64(consumed)
-			w.sample = bytes.Clone(data[max(0, consumed-sampleSize):consumed])
 		}
 		if short {
 			return nil
@@ -274,6 +248,42 @@ func (w *Watcher) readNew(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// readWindow reads and stores what's in one window of the file. It reports whether
+// that reached the end of the file and whether anything new was queued.
+func (w *Watcher) readWindow(ctx context.Context) (short, queued bool, err error) {
+	data, err := w.readAt(w.offset, w.window)
+	if err != nil {
+		return false, false, err
+	}
+	records, consumed, sawTag := adif.Scan(data)
+	w.sawTag = w.sawTag || sawTag
+
+	found, outside, queued, err := w.store(ctx, records)
+	if err != nil {
+		return false, queued, err
+	}
+	w.setStatus(func(status *Status) {
+		status.Contacts += found
+		status.Outside += outside
+		if queued {
+			status.LastRead = time.Now()
+		}
+	})
+
+	short = len(data) < w.window
+	if consumed == 0 && !short {
+		// A whole window with no end of record is no log the relay can read. Skip
+		// it so the rest of the file still gets read.
+		w.log.Warn("skipping text in a log file with no record end", "path", w.path, "offset", w.offset)
+		consumed = len(data)
+	}
+	if consumed > 0 {
+		w.offset += int64(consumed)
+		w.sample = bytes.Clone(data[max(0, consumed-sampleSize):consumed])
+	}
+	return short, queued, nil
 }
 
 // store saves records. The caller only moves past them once this succeeds, and

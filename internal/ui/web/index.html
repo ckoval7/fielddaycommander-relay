@@ -162,14 +162,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </html>
 
 {{define "status"}}
-{{if .Status.Sender.ClockSkew}}<div class="alert alert-warning alert-soft" role="status">{{printf text.ClockWarning (minutes .Status.Sender.ClockSkew)}}</div>{{end}}
-{{if and .Status.Enrolled (ne .Status.Sender.State "online")}}<div class="alert alert-soft {{if eq (senderBadge .Status.Sender.State) "badge-error"}}alert-error{{end}}" role="status">{{senderState .Status.Sender.State}}</div>{{end}}
-{{if and .Status.N1MMEnabled (not .Status.N1MM.Listening)}}<div class="alert alert-error alert-soft" role="status">{{text.N1MMBlocked}}</div>{{end}}
-{{if .Status.N1MM.Dropped}}<div class="alert alert-warning alert-soft" role="status">{{printf text.N1MMDropped .Status.N1MM.Dropped}}</div>{{end}}
+{{if .Status.Sender.ClockSkew}}<output class="alert alert-warning alert-soft">{{printf text.ClockWarning (minutes .Status.Sender.ClockSkew)}}</output>{{end}}
+{{if and .Status.Enrolled (ne .Status.Sender.State "online")}}<output class="alert alert-soft {{if eq (senderBadge .Status.Sender.State) "badge-error"}}alert-error{{end}}">{{senderState .Status.Sender.State}}</output>{{end}}
+{{if and .Status.N1MMEnabled (not .Status.N1MM.Listening)}}<output class="alert alert-error alert-soft">{{text.N1MMBlocked}}</output>{{end}}
+{{if .Status.N1MM.Dropped}}<output class="alert alert-warning alert-soft">{{printf text.N1MMDropped .Status.N1MM.Dropped}}</output>{{end}}
 {{if .Status.N3FJPOff}}
-{{else if .Status.ServerRole}}{{if not .Status.N3FJPServer.Listening}}<div class="alert alert-error alert-soft" role="status">{{text.ServerRoleFailed}}</div>{{end}}
-{{else if not .Status.Source.Connected}}<div class="alert alert-warning alert-soft" role="status">{{text.LoggerConnecting}}</div>
-{{else if not .Status.Source.LogAnswered}}<div class="alert alert-warning alert-soft" role="status">{{text.LoggerWaiting}}</div>{{end}}
+{{else if .Status.ServerRole}}{{if not .Status.N3FJPServer.Listening}}<output class="alert alert-error alert-soft">{{text.ServerRoleFailed}}</output>{{end}}
+{{else if not .Status.Source.Connected}}<output class="alert alert-warning alert-soft">{{text.LoggerConnecting}}</output>
+{{else if not .Status.Source.LogAnswered}}<output class="alert alert-warning alert-soft">{{text.LoggerWaiting}}</output>{{end}}
 
 <section class="stats stats-vertical sm:stats-horizontal w-full bg-base-100 border border-base-300 overflow-x-auto">
 <div class="stat">
@@ -272,7 +272,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 {{end}}{{if .Status.Sender.CanCreateStations}}<option value="{{$picked}}" data-new-station{{if .NewStation}} selected{{end}}>{{text.StationNewOption}}</option>
 {{end}}</select>
 </div>
-{{if stationMissing .Status}}<div class="alert alert-warning alert-soft" role="status">{{text.StationMissing}}</div>
+{{if stationMissing .Status}}<output class="alert alert-warning alert-soft">{{text.StationMissing}}</output>
 {{else if stationUnlisted .Status}}<p class="text-sm opacity-70">{{text.StationUnlisted}}</p>{{end}}
 {{if and (not .Status.Sender.Stations) (not .Status.Sender.CanCreateStations)}}<p class="text-sm">{{text.StationEmpty}}</p>{{end}}
 </form>
