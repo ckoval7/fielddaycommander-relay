@@ -331,7 +331,3 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </div>
 </section>
 {{end}}
-
-{{define "refresh"}}<div id="status">{{template "status" .}}</div>
-<div id="log-files">{{template "logfiles" .}}</div>
-<div id="station">{{if .Status.Enrolled}}{{template "station" .}}{{end}}</div>{{end}}

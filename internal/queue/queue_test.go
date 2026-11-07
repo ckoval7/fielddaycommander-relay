@@ -111,7 +111,8 @@ func TestAContactIsNotGoneUntilAnswered(t *testing.T) {
 	q := open(t)
 	put(t, q, normalized(t, "W1AW"))
 
-	if len(next(t, q)) != 1 || len(next(t, q)) != 1 {
+	first, second := next(t, q), next(t, q)
+	if len(first) != 1 || len(second) != 1 {
 		t.Fatal("reading the queue must not remove a contact")
 	}
 }

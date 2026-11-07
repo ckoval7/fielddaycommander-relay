@@ -16,12 +16,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
+	"github.com/ckoval7/fielddaycommander-relay/internal/backoff"
 	"github.com/ckoval7/fielddaycommander-relay/internal/contact"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 )
@@ -103,7 +103,7 @@ func (s *Syncer) Run(ctx context.Context) {
 			handshake, err := s.client.Handshake(ctx)
 			if err != nil {
 				failures++
-				if !sleep(ctx, s.backoff(failures)) {
+				if !sleep(ctx, backoff.Wait(failures, s.minWait, s.maxWait)) {
 					return
 				}
 				continue
@@ -146,7 +146,7 @@ func (s *Syncer) Run(ctx context.Context) {
 			s.log.Warn("following the server's contacts failed", "error", err)
 			failures++
 			available = false
-			if !sleep(ctx, s.backoff(failures)) {
+			if !sleep(ctx, backoff.Wait(failures, s.minWait, s.maxWait)) {
 				return
 			}
 		}
@@ -335,15 +335,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func (s *Syncer) backoff(failures int) time.Duration {
-	wait := s.minWait
-	for i := 1; i < failures && wait < s.maxWait; i++ {
-		wait *= 2
-	}
-	wait = min(wait, s.maxWait)
-	return wait + time.Duration(rand.Int64N(int64(wait)/5+1))
 }
 
 func (s *Syncer) setStatus(change func(*Status)) {

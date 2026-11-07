@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"slices"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
+	"github.com/ckoval7/fielddaycommander-relay/internal/backoff"
 	"github.com/ckoval7/fielddaycommander-relay/internal/contact"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 )
@@ -179,7 +179,7 @@ func (s *Sender) Run(ctx context.Context) {
 
 		switch {
 		case !ok && wait == 0:
-			wait = s.backoff(failures)
+			wait = backoff.Wait(failures, s.minWait, s.maxWait)
 		case ok && wait == 0:
 			continue // There may be more to send right away.
 		}
@@ -342,16 +342,6 @@ func outcomes(items []queue.Item, results map[int]api.Result) []queue.Outcome {
 		}
 	}
 	return out
-}
-
-func (s *Sender) backoff(failures int) time.Duration {
-	wait := s.minWait
-	for i := 1; i < failures && wait < s.maxWait; i++ {
-		wait *= 2
-	}
-	wait = min(wait, s.maxWait)
-	// Up to 20% extra, so a club's relays don't all retry at once.
-	return wait + time.Duration(rand.Int64N(int64(wait)/5+1))
 }
 
 // sleep waits and reports whether to keep running. While the server is

@@ -1,0 +1,10 @@
+{{- /*
+SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+SPDX-License-Identifier: GPL-3.0-or-later
+
+What app.js fetches and reads on its own, to update the regions of the same names
+in the page. It's never part of the page, so its ids don't repeat there.
+*/ -}}
+{{define "refresh"}}<div id="status">{{template "status" .}}</div>
+<div id="log-files">{{template "logfiles" .}}</div>
+<div id="station">{{if .Status.Enrolled}}{{template "station" .}}{{end}}</div>{{end}}

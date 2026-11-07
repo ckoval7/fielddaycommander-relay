@@ -8,6 +8,7 @@
  */
 
 @import "tailwindcss" source(none);
+@import "./theme.css";
 @source "../web/index.html";
 @source "../messages.go";
 
@@ -15,8 +16,6 @@
     themes: false;
     logs: false;
 }
-
-@import "./theme.css";
 
 /* The toggle shows the theme it switches to, as in Field Day Commander. */
 .theme-icon-sun { display: none; }
