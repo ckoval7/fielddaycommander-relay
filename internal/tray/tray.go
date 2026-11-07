@@ -4,6 +4,10 @@
 // Package tray shows the relay's icon in the system tray.
 package tray
 
+// WindowClass names the icon's hidden window. Closing that window closes the relay
+// cleanly, and the installer does that before replacing the program.
+const WindowClass = "FieldDayCommanderRelayTray"
+
 // Options configures the tray icon.
 type Options struct {
 	// IconResource is the ID of the icon built into the program. Without one,

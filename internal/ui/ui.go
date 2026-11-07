@@ -29,6 +29,7 @@ import (
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
 )
 
 const (
@@ -59,6 +60,8 @@ type Backend interface {
 	RemoveLogFile(path string) error
 	SetStation(name string, override bool) error
 	AskServerAgain()
+	StartAtLogin() autostart.Status
+	SetStartAtLogin(on bool) error
 }
 
 // Server serves the page.
@@ -128,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /station", s.protected(s.station))
 	mux.HandleFunc("POST /logfiles/choose", s.protected(s.chooseLogFile))
 	mux.HandleFunc("POST /logfiles/remove", s.protected(s.removeLogFile))
+	mux.HandleFunc("POST /startup", s.protected(s.startup))
 	return s.guard(mux)
 }
 
@@ -224,6 +228,8 @@ type view struct {
 	StationError string
 	// NewStation is a new station's name that was refused, kept for correcting.
 	NewStation string
+	// StartAtLogin is only read for the whole page, not for each refresh.
+	StartAtLogin autostart.Status
 }
 
 // helpView is the wording behind one ? button.
@@ -245,6 +251,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	}
 	data.Status = status
 	data.FormToken = s.formToken
+	if name == pageTemplate {
+		data.StartAtLogin = s.backend.StartAtLogin()
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.pages.ExecuteTemplate(w, name, data); err != nil {
@@ -334,6 +343,15 @@ func (s *Server) station(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("saving the station failed", "error", err)
 		s.render(w, r, pageTemplate, view{ActionError: true})
 	}
+}
+
+func (s *Server) startup(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend.SetStartAtLogin(r.PostFormValue("start_at_login") != ""); err != nil {
+		s.log.Error("saving the startup choice failed", "error", err)
+		s.render(w, r, pageTemplate, view{ActionError: true})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) chooseLogFile(w http.ResponseWriter, r *http.Request) {

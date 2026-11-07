@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Checks main and builds the relay, keeping the binaries as run artifacts. Release
-# tags build too, stamped with their version. Nothing is published.
+# Checks main and builds the relay and its Windows installer, keeping them as run
+# artifacts. Release tags build too, stamped with their version. Nothing is published.
 #
 # Actions are pinned to commit SHAs; the comment names the release.
 name: Build
@@ -115,8 +115,17 @@ jobs:
       - name: Build
         run: go build -trimpath -ldflags "-s -w $LDFLAGS -X main.version=$VERSION" -o "dist/$FILE" ./cmd/relay
 
+      # Two Windows versions: the installer holds relay.exe, so that isn't kept itself.
+      - name: Build the portable version and the installer
+        if: matrix.goos == 'windows'
+        run: |
+          go build -trimpath -ldflags "-s -w $LDFLAGS -X main.version=$VERSION -X main.portable=true" -o dist/relay-portable.exe ./cmd/relay
+          sudo apt-get install -y --no-install-recommends nsis
+          scripts/build-installer.sh "$VERSION"
+          rm dist/relay.exe
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fielddaycommander-relay-${{ env.VERSION }}-${{ matrix.goos }}-amd64
-          path: dist/${{ matrix.file }}
+          path: dist/
           if-no-files-found: error

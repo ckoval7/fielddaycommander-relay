@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,7 +28,9 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
 	"github.com/ckoval7/fielddaycommander-relay/internal/filepicker"
+	"github.com/ckoval7/fielddaycommander-relay/internal/instance"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
 	"github.com/ckoval7/fielddaycommander-relay/internal/tray"
 	"github.com/ckoval7/fielddaycommander-relay/internal/ui"
@@ -36,15 +39,26 @@ import (
 // version is set when a release is built.
 var version = "dev"
 
+// portable is "true" in the portable build, which keeps its data beside the program
+// and adds nothing to what starts at sign-in.
+var portable = ""
+
 const (
 	dataFolder = "Field Day Commander Relay"
+	// portableFolder is beside the portable build's program.
+	portableFolder = "relay-data"
+	// portableIDFile names this portable folder's token in the keychain.
+	portableIDFile = "keychain.id"
 	// iconResource is the icon group in rsrc_windows_amd64.syso, built from
 	// assets/relay.ico.
-	iconResource  = 1
-	logFile       = "relay.log"
-	crashFile     = "crash.log"
-	maxLogBytes   = 5 << 20
-	preferredPort = 17311
+	iconResource = 1
+	logFile      = "relay.log"
+	// portFile says where the page is, in case the usual port was taken.
+	portFile         = "page.port"
+	crashFile        = "crash.log"
+	maxLogBytes      = 5 << 20
+	preferredPort    = 17311
+	findPageAttempts = 5
 )
 
 func main() {
@@ -59,7 +73,15 @@ func run() error {
 	noBrowser := flag.Bool("no-browser", false, "don't open the status page at startup")
 	flag.Parse()
 
-	dataDir, err := resolveDataDir(*dataDirFlag)
+	isPortable := portable == "true"
+	program := ""
+	if isPortable {
+		var err error
+		if program, err = os.Executable(); err != nil {
+			return fmt.Errorf("find the program's folder: %w", err)
+		}
+	}
+	dataDir, besideProgramErr, err := resolveDataDir(*dataDirFlag, program)
 	if err != nil {
 		return err
 	}
@@ -68,17 +90,41 @@ func run() error {
 		return err
 	}
 	defer closeLog()
-	if err := captureCrashes(dataDir); err != nil {
-		log.Warn("couldn't set up the crash log", "error", err)
+	if besideProgramErr != nil {
+		log.Warn("couldn't keep data beside the program, so it's in the usual folder", "error", besideProgramErr)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The person started it again, most likely looking for the page. A start at
+	// sign-in isn't looking for anything.
+	alreadyRunning := func() {
+		log.Info("another relay is running, so this one is stopping")
+		if !*noBrowser {
+			openRunningPage(ctx, dataDir, log)
+		}
+	}
+
+	release, err := instance.Acquire()
+	if errors.Is(err, instance.ErrHeld) {
+		alreadyRunning()
+		return nil
+	}
+	if err != nil {
+		// Collecting contacts matters more than this check, and the port check is left.
+		log.Warn("couldn't check for another relay", "error", err)
+	} else {
+		defer release()
+	}
+
+	if err := captureCrashes(dataDir); err != nil {
+		log.Warn("couldn't set up the crash log", "error", err)
+	}
+
 	listener, err := listen(ctx)
 	if errors.Is(err, errAlreadyRunning) {
-		// The person started it again, most likely looking for the page.
-		openBrowser(pageURL(preferredPort), log)
+		alreadyRunning()
 		return nil
 	}
 	if err != nil {
@@ -86,8 +132,26 @@ func run() error {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	url := pageURL(port)
+	savePort(dataDir, port, log)
 
-	relay, err := app.New(app.Config{DataDir: dataDir, Version: version, Store: secret.New(secret.DefaultTarget), Log: log, PickLogFile: pickLogFile})
+	target := secret.DefaultTarget
+	var starter autostart.Starter
+	if isPortable {
+		if target, err = portableTarget(dataDir); err != nil {
+			_ = listener.Close()
+			return err
+		}
+	} else {
+		starter = startAtSignIn(*dataDirFlag, log)
+	}
+	relay, err := app.New(app.Config{
+		DataDir:     dataDir,
+		Version:     version,
+		Store:       secret.New(target),
+		Log:         log,
+		PickLogFile: pickLogFile,
+		Autostart:   starter,
+	})
 	if err != nil {
 		_ = listener.Close()
 		return err
@@ -137,19 +201,75 @@ func run() error {
 	return nil
 }
 
-func resolveDataDir(override string) (string, error) {
-	dir := override
+// startAtSignIn returns this program's startup entry, or nil if there can't be one.
+// An override has to come along, or the relay would come back with other data.
+func startAtSignIn(dataDirOverride string, log *slog.Logger) autostart.Starter {
+	program, err := os.Executable()
+	if err != nil {
+		log.Warn("couldn't find this program for starting at sign-in", "error", err)
+		return nil
+	}
+	if dataDirOverride != "" {
+		if dataDirOverride, err = filepath.Abs(dataDirOverride); err != nil {
+			log.Warn("couldn't find the data folder for starting at sign-in", "error", err)
+			return nil
+		}
+	}
+	return autostart.New(program, dataDirOverride)
+}
+
+// resolveDataDir picks the data folder. program is set in the portable build. If its
+// folder can't be written, as on a locked drive, the relay still has to collect
+// contacts, so it uses the usual folder and besideProgramErr says why.
+func resolveDataDir(override, program string) (dir string, besideProgramErr, err error) {
+	if override != "" {
+		dir = override
+	} else if program != "" {
+		dir = filepath.Join(filepath.Dir(program), portableFolder)
+		if besideProgramErr = checkWritable(dir); besideProgramErr == nil {
+			return dir, nil, nil
+		}
+		dir = ""
+	}
 	if dir == "" {
 		config, err := os.UserConfigDir()
 		if err != nil {
-			return "", fmt.Errorf("find the data folder: %w", err)
+			return "", besideProgramErr, fmt.Errorf("find the data folder: %w", err)
 		}
 		dir = filepath.Join(config, dataFolder)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create the data folder: %w", err)
+		return "", besideProgramErr, fmt.Errorf("create the data folder: %w", err)
 	}
-	return dir, nil
+	return dir, besideProgramErr, nil
+}
+
+func checkWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(dir, "write-check-*")
+	if err != nil {
+		return err
+	}
+	_ = probe.Close()
+	return os.Remove(probe.Name())
+}
+
+// portableTarget names this folder's token in the keychain, which every copy on a
+// computer shares. With one name, connecting a portable copy would replace another
+// copy's token, and that copy would then send it to its own server. The ID moves
+// with the folder, so a new drive letter doesn't mean connecting again.
+func portableTarget(dir string) (string, error) {
+	path := filepath.Join(dir, portableIDFile)
+	id, err := os.ReadFile(path)
+	if err != nil || len(strings.TrimSpace(string(id))) == 0 {
+		id = []byte(rand.Text())
+		if err := os.WriteFile(path, id, 0o600); err != nil {
+			return "", fmt.Errorf("save the keychain name: %w", err)
+		}
+	}
+	return secret.DefaultTarget + "/" + strings.TrimSpace(string(id)), nil
 }
 
 // openLog starts a log file, setting the old one aside once it's large. There's
@@ -189,17 +309,59 @@ func listen(ctx context.Context) (net.Listener, error) {
 	if err == nil {
 		return listener, nil
 	}
-	if relayIsAnswering(ctx) {
+	if relayIsAnswering(ctx, preferredPort) {
 		return nil, errAlreadyRunning
 	}
 	return net.Listen("tcp", "127.0.0.1:0")
 }
 
-func relayIsAnswering(ctx context.Context) bool {
+// savePort notes where this relay's page is. It's left behind when the relay stops,
+// since whoever reads it asks that port what it is.
+func savePort(dir string, port int, log *slog.Logger) {
+	if err := os.WriteFile(filepath.Join(dir, portFile), []byte(strconv.Itoa(port)), 0o600); err != nil {
+		log.Warn("couldn't save the page's port", "error", err)
+	}
+}
+
+// savedPort is the port a relay using dir last noted, or 0.
+func savedPort(dir string) int {
+	data, err := os.ReadFile(filepath.Join(dir, portFile))
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || port < 1 || port > 65535 {
+		return 0
+	}
+	return port
+}
+
+// openRunningPage shows the page of the relay already running. That relay may be
+// starting at the same moment, so it gets a few seconds to answer.
+func openRunningPage(ctx context.Context, dir string, log *slog.Logger) {
+	for attempt := range findPageAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+		for _, port := range []int{preferredPort, savedPort(dir)} {
+			if port != 0 && relayIsAnswering(ctx, port) {
+				openBrowser(pageURL(port), log)
+				return
+			}
+		}
+	}
+	log.Warn("another relay is running, but its page isn't answering")
+}
+
+func relayIsAnswering(ctx context.Context, port int) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL(preferredPort)+"health", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL(port)+"health", nil)
 	if err != nil {
 		return false
 	}

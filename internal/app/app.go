@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
+	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
 	"github.com/ckoval7/fielddaycommander-relay/internal/feed"
 	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
 	"github.com/ckoval7/fielddaycommander-relay/internal/n1mm"
@@ -101,6 +102,8 @@ var ErrStationNotAllowed = errors.New("station isn't on the server")
 
 var errNoFileWindow = errors.New("this build has no file window")
 
+var errNoAutostart = errors.New("this build can't start at sign-in")
+
 // EnrollRequest is what a person enters to enroll.
 type EnrollRequest struct {
 	ServerURL string
@@ -154,6 +157,8 @@ type Config struct {
 	// PickLogFile asks the person for a file and returns its location, or "" if they
 	// change their mind.
 	PickLogFile func() (string, error)
+	// Autostart starts the relay at sign-in. Nil means this build can't.
+	Autostart autostart.Starter
 }
 
 // App is the running relay.
@@ -685,6 +690,28 @@ func (a *App) setLogFilesLocked(paths []string) error {
 		a.startFilesLocked(notify)
 	}
 	return nil
+}
+
+// StartAtLogin reports whether the relay will start at the next sign-in. If that
+// can't be read, the page doesn't offer a choice it can't show correctly.
+func (a *App) StartAtLogin() autostart.Status {
+	if a.cfg.Autostart == nil {
+		return autostart.Status{}
+	}
+	status, err := a.cfg.Autostart.Status()
+	if err != nil {
+		a.cfg.Log.Warn("couldn't read the startup entry", "error", err)
+		return autostart.Status{}
+	}
+	return status
+}
+
+// SetStartAtLogin changes whether the relay starts at sign-in.
+func (a *App) SetStartAtLogin(on bool) error {
+	if a.cfg.Autostart == nil {
+		return errNoAutostart
+	}
+	return a.cfg.Autostart.Set(on)
 }
 
 // Status reports the relay's current state.

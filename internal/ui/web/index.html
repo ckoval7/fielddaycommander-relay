@@ -157,6 +157,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </div>
 </section>
 </div>
+
+{{if .StartAtLogin.Available}}
+<section class="card card-border bg-base-100">
+<div class="card-body">
+<h2 class="card-title text-base">{{text.StartupHeading}}</h2>
+<form method="post" action="/startup" class="flex flex-col gap-3">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="start_at_login" data-autosave{{if .StartAtLogin.On}} checked{{end}}> {{text.StartAtLoginLabel}}</label>
+{{template "help" (help text.StartAtLoginLabel text.StartAtLoginHelp)}}
+</div>
+{{with .StartAtLogin.OtherCopy}}<output class="alert alert-warning alert-soft break-all">{{printf text.StartAtLoginOtherCopy .}}</output>{{end}}
+{{if .StartAtLogin.TurnedOffInWindows}}<output class="alert alert-warning alert-soft">{{text.StartAtLoginTurnedOff}}</output>{{end}}
+</form>
+</div>
+</section>
+{{end}}
 </main>
 </body>
 </html>

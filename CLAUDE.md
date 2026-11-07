@@ -6,7 +6,7 @@ The server app is a separate repo, checked out at `/home/corey/fielddaycommander
 
 ## Status
 
-The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). `app`, `ui`, `secret`, `settings`, `tray` and `cmd/relay` make it a program, `feed` brings server changes back for two-way sync, and `logfile` (with `adif`) picks contacts up from log files on disk. There's no installer or start-at-login yet, and the Windows keychain and tray have only been compiled here, because this environment can't run Windows binaries. Keychain support exists only on Windows, so other builds can't enroll. The server's API is in the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
+The core exists under `internal/`: contact rules (`contact`), durable queue (`queue`), API client (`api`), send loop (`sender`) and the N3FJP source (`n3fjp`). `app`, `ui`, `secret`, `settings`, `tray` and `cmd/relay` make it a program, `feed` brings server changes back for two-way sync, and `logfile` (with `adif`) picks contacts up from log files on disk. `autostart` starts the relay at sign-in (not boot, since the token, tray and file window all belong to the signed-in person). `instance` keeps a second copy from running, and Windows has two versions: `installer/` (NSIS, per person, unsigned) and a portable build (`-X main.portable=true`) that keeps its data in `relay-data` beside the program, has its own keychain entry per folder, and never adds a startup entry. The Windows keychain, startup entry, tray and installer have only been compiled here, because this environment can't run Windows binaries. Keychain and start-at-sign-in support exist only on Windows, so other builds can't enroll. The server's API is in the app repo, and `api/relay-v1.openapi.yaml` is a pinned copy of its contract.
 
 ## Stack
 
@@ -30,6 +30,7 @@ The UI is a small settings and status page served on localhost, plus a tray icon
 - **Credentials.** A relay enrolls with a one-time code and receives a revocable per-relay token, stored in the OS keychain. Never write it to a log or a plain config file.
 - **Two-way sync compares with the server, not the logger.** A contact counts as changed only when it differs from what the server last said, and only the fields that changed reach the logger, so values the server doesn't store (a `5NN` report) are never overwritten. An unanswered upload is newer than anything the feed shows, so feed changes for that contact wait. Identity is the contact's `uuid`, which also reaches contacts logged elsewhere with no idempotency key.
 - **The picked station is applied when sending.** The queue keeps what the logger said, so changing the pick re-sends nothing and reaches contacts still waiting. It fills a blank station, and replaces a named one only when the override is on. The server only says what its stations are, and creates one when a contact first names it, so a new name stays local until then. The feed never writes the station back to a logger, because a relay's own upload only sets the baseline.
+- **One relay per computer.** A running relay holds a machine-wide named mutex, so a second copy opens the first one's page and stops. The installer closes a running relay through its tray window before replacing it, and never removes the data folder or token.
 - **Local data is untrusted.** Local logger protocols have no authentication, so anything on the LAN could be talking to the relay. Validate everything before it's queued, and default to connecting only to localhost or an address the user set.
 
 ## Log sources
@@ -71,7 +72,7 @@ Files that can't hold a comment go in `REUSE.toml`. `reuse lint` must pass (the 
 - **Never push or offer to.** The user pushes.
 - **Go runs in a container,** because the host doesn't have it.
 
-Activate the `branch-workflow` skill before you start, commit or merge work, or run Go tooling.
+Activate the `branch-workflow` skill before you start, commit or merge work, run Go tooling, or scan with Sonar.
 
 ## Writing
 

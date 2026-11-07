@@ -1,6 +1,6 @@
 ---
 name: branch-workflow
-description: Use this skill for any of these tasks in Field Day Commander Relay: choosing a branch; starting, committing or merging work; merging feature branches into dev; or running Go, tests, gofmt, go vet or reuse lint.
+description: Use this skill for any of these tasks in Field Day Commander Relay: choosing a branch; starting, committing or merging work; merging feature branches into dev; running Go, tests, gofmt, go vet or reuse lint; or scanning with Sonar.
 ---
 
 # Branch Workflow
@@ -59,3 +59,20 @@ Every new file needs an SPDX header or a `REUSE.toml` entry. This must pass:
 ```bash
 docker run --rm -v "$PWD":/data fsfe/reuse lint
 ```
+
+## Checking a branch with Sonar
+
+Any request to scan or check with Sonar uses `scripts/sonar-local.sh`. It runs a local SonarQube server with SonarCloud's **Sonar way comprehensive** profiles. Never scan with the `sonarqube:community` defaults, which miss much of what SonarCloud flags.
+
+```bash
+scripts/sonar-local.sh up     # about a minute; imports the profiles and lists rules it can't run
+scripts/sonar-local.sh scan   # whole checkout, HEAD plus uncommitted changes
+git diff --name-only dev      # the files this branch owns; findings elsewhere are older
+scripts/sonar-local.sh down   # when finished
+```
+
+**Sonar containers are throw-away.** Nothing in them is kept or needed later, so they're safe to remove after use, including any left over from another session. `up` replaces a leftover `fdc-relay-sonar` that has no saved state.
+
+The token is `SONAR_TOKEN` in the environment or in `../fielddaycommander/.env`. It only goes to SonarCloud. Never print it.
+
+A clean local scan doesn't guarantee a clean SonarCloud scan, so say what it can't see: the rules `up` lists as not active locally (most of the Go profile), shell scripts and GitHub Actions (no local analyzer), hidden folders such as `.github/`, `installer/relay.nsi`, and coverage. Check those files by hand. SonarCloud itself only scans PRs into `main`.
