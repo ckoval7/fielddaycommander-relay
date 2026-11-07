@@ -71,6 +71,8 @@ git diff --name-only dev      # the files this branch owns; findings elsewhere a
 scripts/sonar-local.sh down   # when finished
 ```
 
+**The whole point of scanning is to fix things.** Fix every real finding in the branch's files, whatever its severity, then scan again until only false positives are left. Don't stop at a report or ask whether to fix them. False positives are never worked around in code: name them, with the reason, and the user clears them in SonarCloud.
+
 **Sonar containers are throw-away.** Nothing in them is kept or needed later, so they're safe to remove after use, including any left over from another session. `up` replaces a leftover `fdc-relay-sonar` that has no saved state.
 
 The token is `SONAR_TOKEN` in the environment or in `../fielddaycommander/.env`. It only goes to SonarCloud. Never print it.

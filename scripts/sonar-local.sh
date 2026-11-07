@@ -56,7 +56,8 @@ wait_for_up() {
 }
 
 local_rule_count() {
-    api "${URL}/api/qualityprofiles/search?language=$1" \
+    local language="$1"
+    api "${URL}/api/qualityprofiles/search?language=${language}" \
         | jq '[.profiles[] | select(.name | startswith("SonarCloud"))][0].activeRuleCount // 0'
 }
 
