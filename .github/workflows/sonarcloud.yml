@@ -5,12 +5,16 @@
 # analysis can't import coverage and can't run beside this, so it has to stay off
 # in the SonarCloud project settings.
 #
+# Fork PRs don't get SONAR_TOKEN, so they run the tests only.
+#
 # Actions are pinned to commit SHAs; the comment names the release.
 name: Tests and SonarCloud
 
 on:
   push:
     branches: [main, dev]
+  pull_request:
+    branches: [main]
 
 permissions: {}
 
@@ -39,6 +43,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
 
       - name: Send results to SonarCloud
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
