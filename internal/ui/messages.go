@@ -154,6 +154,9 @@ func fileBadgeClass(state logfile.State) string {
 	return "badge-error"
 }
 
+// PageTitle is the page's title, which is how its window is found again.
+func PageTitle() string { return pageWords.Title }
+
 // pageText is the wording of the page that isn't a status or an error.
 type pageText struct {
 	Title, ServerHeading, LoggerHeading, QueueHeading, AttentionHeading string

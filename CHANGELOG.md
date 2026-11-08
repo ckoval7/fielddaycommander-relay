@@ -1,5 +1,6 @@
 ## Unreleased
 
+- On Windows, Field Day Commander Relay now opens its status page in a separate Microsoft Edge window without tabs. Opening the page again reuses that window.
 - Run `relay-portable.exe` without installing. Contacts, settings, and logs are saved in `relay-data` beside the program. Move or back up both together. The connection token stays in the PC's Windows keychain, so connect with a new enrollment code on another PC or Windows account. The portable version doesn't offer start at sign-in.
 - Install Field Day Commander Relay with `relay-setup.exe` on 64-bit Windows 10 or later, without administrator rights. Run the new installer to update and keep saved contacts and your server connection. Uninstall from Windows' Apps list. Collected contacts, settings, and the connection token stay on the computer.
 - Run one relay per computer, across Windows accounts. Starting it again opens the running relay's status page, and the new copy stops. If another Windows account's relay is running on this PC, yours won't run because logger ports belong to the whole computer.

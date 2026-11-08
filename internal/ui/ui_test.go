@@ -425,6 +425,14 @@ func TestAFailedStartupChoiceSaysSo(t *testing.T) {
 	}
 }
 
+// The relay finds the page's window by this title, so it has to be exactly the same.
+func TestThePageHasTheTitleItsWindowIsFoundBy(t *testing.T) {
+	body := get(newServer(t, &fakeBackend{}), "/").Body.String()
+	if want := "<title>" + PageTitle() + "</title>"; !strings.Contains(body, want) {
+		t.Errorf("the page doesn't contain %s", want)
+	}
+}
+
 func TestThePageShowsWhatTheNextSignInWillDo(t *testing.T) {
 	checkbox := regexp.MustCompile(`<input[^>]*name="start_at_login"[^>]*>`)
 	other := `C:\Old Copyelay.exe`
