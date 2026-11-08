@@ -40,6 +40,17 @@ type Settings struct {
 	N1MMEnabled bool `json:"n1mm_enabled,omitempty"`
 	// N1MMOnNetwork lets other PCs' N1MM send here. Its broadcasts have no password.
 	N1MMOnNetwork bool `json:"n1mm_on_network,omitempty"`
+	// WSJTXEnabled listens for WSJT-X and JTDX, and UDPADIFEnabled for loggers that
+	// send plain ADIF. Like N1MM, each is off until asked for and reaches only this
+	// computer until its OnNetwork setting is on.
+	WSJTXEnabled     bool `json:"wsjtx_enabled,omitempty"`
+	WSJTXOnNetwork   bool `json:"wsjtx_on_network,omitempty"`
+	UDPADIFEnabled   bool `json:"udp_adif_enabled,omitempty"`
+	UDPADIFOnNetwork bool `json:"udp_adif_on_network,omitempty"`
+	// WSJTXPort and UDPADIFPort are the ports they listen on. Zero means the
+	// server's defaults, 2237 and 2238.
+	WSJTXPort   int `json:"wsjtx_port,omitempty"`
+	UDPADIFPort int `json:"udp_adif_port,omitempty"`
 	// Station is the server's station this relay is set up for. Empty means the
 	// server uses the relay's name.
 	Station string `json:"station,omitempty"`

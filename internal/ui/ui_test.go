@@ -27,6 +27,7 @@ import (
 	"github.com/ckoval7/fielddaycommander-relay/internal/n3fjp"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 	"github.com/ckoval7/fielddaycommander-relay/internal/sender"
+	"github.com/ckoval7/fielddaycommander-relay/internal/udplog"
 )
 
 type fakeBackend struct {
@@ -44,6 +45,9 @@ type fakeBackend struct {
 	n1mmOn    bool
 	n1mmLAN   bool
 	n1mmErr   error
+	udp       map[udplog.Kind][2]bool
+	udpPorts  map[udplog.Kind]int
+	udpErr    error
 
 	station    string
 	override   bool
@@ -71,6 +75,14 @@ func (f *fakeBackend) SetLogger(role, address string, listen bool) error {
 func (f *fakeBackend) SetN1MM(enabled, onNetwork bool) error {
 	f.n1mmOn, f.n1mmLAN = enabled, onNetwork
 	return f.n1mmErr
+}
+func (f *fakeBackend) SetUDPLogger(kind udplog.Kind, enabled, onNetwork bool, port int) error {
+	if f.udp == nil {
+		f.udp, f.udpPorts = map[udplog.Kind][2]bool{}, map[udplog.Kind]int{}
+	}
+	f.udp[kind] = [2]bool{enabled, onNetwork}
+	f.udpPorts[kind] = port
+	return f.udpErr
 }
 func (f *fakeBackend) SetStation(name string, override bool) error {
 	f.station, f.override = name, override
@@ -158,13 +170,13 @@ func TestChangesNeedThisRunsTokenAndTheSameOrigin(t *testing.T) {
 		{"cross-site fetch", good, map[string]string{"Sec-Fetch-Site": "cross-site"}},
 	}
 	for _, tt := range tests {
-		for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/logfiles/choose", "/logfiles/remove"} {
+		for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/wsjtx", "/udp-adif", "/logfiles/choose", "/logfiles/remove"} {
 			if got := post(server, path, tt.form, tt.headers).Code; got != http.StatusForbidden {
 				t.Errorf("%s %s: %d", tt.name, path, got)
 			}
 		}
 	}
-	if backend.forgotten != 0 || len(backend.enrolled) != 0 || len(backend.addresses) != 0 || backend.n1mmOn || backend.choosing != 0 || len(backend.removed) != 0 {
+	if backend.forgotten != 0 || len(backend.enrolled) != 0 || len(backend.addresses) != 0 || backend.n1mmOn || len(backend.udp) != 0 || backend.choosing != 0 || len(backend.removed) != 0 {
 		t.Errorf("a refused request changed something: %+v", backend)
 	}
 
@@ -219,7 +231,7 @@ func TestATabLeftOpenAcrossARestartGetsAFreshPageAndChangesNothing(t *testing.T)
 func TestGetCannotChangeAnything(t *testing.T) {
 	backend := &fakeBackend{}
 	server := newServer(t, backend)
-	for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/logfiles/choose", "/logfiles/remove"} {
+	for _, path := range []string{"/forget", "/enroll", "/n3fjp", "/n1mm", "/wsjtx", "/udp-adif", "/logfiles/choose", "/logfiles/remove"} {
 		if got := get(server, path).Code; got != http.StatusMethodNotAllowed {
 			t.Errorf("%s: %d", path, got)
 		}
@@ -776,6 +788,99 @@ func TestN1MMShowsWhatItIsDoing(t *testing.T) {
 		if !strings.Contains(listening, want) {
 			t.Errorf("page lacks %q", want)
 		}
+	}
+}
+
+func TestUDPLoggersCanBeTurnedOn(t *testing.T) {
+	backend := &fakeBackend{}
+	server := newServer(t, backend)
+	on := url.Values{"form_token": {server.formToken}, "enabled": {"on"}, "on_network": {"on"}}
+	if got := post(server, "/wsjtx", on, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("got %d", got)
+	}
+	if got := post(server, "/udp-adif", url.Values{"form_token": {server.formToken}, "enabled": {"on"}}, nil).Code; got != http.StatusSeeOther {
+		t.Errorf("got %d", got)
+	}
+	if backend.udp[udplog.WSJTX] != [2]bool{true, true} || backend.udp[udplog.ADIF] != [2]bool{true, false} {
+		t.Errorf("backend = %+v", backend.udp)
+	}
+	backend.udpErr = errors.New("disk full")
+	body := html.UnescapeString(post(server, "/wsjtx", url.Values{"form_token": {server.formToken}}, nil).Body.String())
+	if !strings.Contains(body, pageWords.ActionError) || backend.udp[udplog.WSJTX][0] {
+		t.Error("no explanation, or the setting wasn't passed on")
+	}
+}
+
+func TestUDPLoggersShowWhatTheyAreDoing(t *testing.T) {
+	page := func(s app.Status) string {
+		return html.UnescapeString(get(newServer(t, &fakeBackend{status: s}), "/").Body.String())
+	}
+
+	off := page(app.Status{})
+	for _, words := range []udpWords{wsjtxWords, udpADIFWords} {
+		if !strings.Contains(off, words.EnableLabel) || strings.Contains(off, words.Blocked) || strings.Contains(off, words.NetworkLabel) {
+			t.Errorf("%s: no way to turn it on, or it shows more than that while off", words.Heading)
+		}
+	}
+	if strings.Contains(off, `name="enabled" data-autosave checked`) {
+		t.Error("a listener starts on")
+	}
+
+	blocked := page(app.Status{WSJTX: app.UDPLogger{Enabled: true, Port: 2333}, UDPADIF: app.UDPLogger{Port: 2238}})
+	if !strings.Contains(blocked, fmt.Sprintf(wsjtxWords.Blocked, 2333)) || strings.Contains(blocked, fmt.Sprintf(udpADIFWords.Blocked, 2238)) {
+		t.Error("the busy port isn't reported, or is reported for the wrong listener")
+	}
+	if !strings.Contains(blocked, `id="wsjtx-port"`) || !strings.Contains(blocked, `value="2333"`) || strings.Contains(blocked, `id="udp-adif-port"`) {
+		t.Error("the port field should show its port, and only while the listener is on")
+	}
+
+	listening := page(app.Status{UDPADIF: app.UDPLogger{Enabled: true, OnNetwork: true, Status: udplog.Status{Listening: true, Contacts: 7, Outside: 3, Dropped: 2}}})
+	for _, want := range []string{
+		udpADIFWords.Heading, pageWords.N1MMContacts + ": 7", pageWords.LogFileOutside + ": 3",
+		fmt.Sprintf(udpADIFWords.Dropped, 2), `name="on_network" data-autosave checked`, `action="/udp-adif"`,
+	} {
+		if !strings.Contains(listening, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestAUDPLoggerPortCanBeChanged(t *testing.T) {
+	backend := &fakeBackend{status: app.Status{WSJTX: app.UDPLogger{Enabled: true, Port: 2237}}}
+	server := newServer(t, backend)
+	form := func(port string) url.Values {
+		return url.Values{"form_token": {server.formToken}, "enabled": {"on"}, "port": {port}}
+	}
+
+	if got := post(server, "/wsjtx", form(" 2333 "), nil).Code; got != http.StatusSeeOther {
+		t.Errorf("got %d", got)
+	}
+	if backend.udpPorts[udplog.WSJTX] != 2333 {
+		t.Errorf("port %d", backend.udpPorts[udplog.WSJTX])
+	}
+	// Ticking the box before the field shows sends no port, which keeps the old one.
+	if post(server, "/wsjtx", url.Values{"form_token": {server.formToken}, "enabled": {"on"}}, nil); backend.udpPorts[udplog.WSJTX] != 0 {
+		t.Errorf("no port was passed on as %d", backend.udpPorts[udplog.WSJTX])
+	}
+
+	delete(backend.udpPorts, udplog.WSJTX)
+	body := html.UnescapeString(post(server, "/wsjtx", form("twenty"), nil).Body.String())
+	if !strings.Contains(body, pageWords.PortBad) || !strings.Contains(body, `value="twenty"`) {
+		t.Error("a port that isn't a number isn't explained or isn't kept for correcting")
+	}
+	if _, called := backend.udpPorts[udplog.WSJTX]; called {
+		t.Error("a port that isn't a number reached the backend")
+	}
+
+	backend.udpErr = app.ErrPortTaken
+	body = html.UnescapeString(post(server, "/wsjtx", form("12060"), nil).Body.String())
+	if !strings.Contains(body, pageWords.PortTaken) {
+		t.Error("a port in use isn't explained")
+	}
+	backend.udpErr = app.ErrBadPort
+	body = html.UnescapeString(post(server, "/wsjtx", form("70000"), nil).Body.String())
+	if !strings.Contains(body, pageWords.PortBad) {
+		t.Error("a port out of range isn't explained")
 	}
 }
 

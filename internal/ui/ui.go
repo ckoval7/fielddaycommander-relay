@@ -30,6 +30,7 @@ import (
 	"github.com/ckoval7/fielddaycommander-relay/internal/api"
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
 	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
+	"github.com/ckoval7/fielddaycommander-relay/internal/udplog"
 )
 
 const (
@@ -56,6 +57,7 @@ type Backend interface {
 	Forget(ctx context.Context) error
 	SetLogger(role, address string, listenOnNetwork bool) error
 	SetN1MM(enabled, onNetwork bool) error
+	SetUDPLogger(kind udplog.Kind, enabled, onNetwork bool, port int) error
 	ChooseLogFile()
 	RemoveLogFile(path string) error
 	SetStation(name string, override bool) error
@@ -128,6 +130,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /forget", s.protected(s.forget))
 	mux.HandleFunc("POST /n3fjp", s.protected(s.logger))
 	mux.HandleFunc("POST /n1mm", s.protected(s.n1mm))
+	mux.HandleFunc("POST /wsjtx", s.protected(s.udpLogger(udplog.WSJTX)))
+	mux.HandleFunc("POST /udp-adif", s.protected(s.udpLogger(udplog.ADIF)))
 	mux.HandleFunc("POST /station", s.protected(s.station))
 	mux.HandleFunc("POST /logfiles/choose", s.protected(s.chooseLogFile))
 	mux.HandleFunc("POST /logfiles/remove", s.protected(s.removeLogFile))
@@ -230,6 +234,46 @@ type view struct {
 	NewStation string
 	// StartAtLogin is only read for the whole page, not for each refresh.
 	StartAtLogin autostart.Status
+	// UDPError is a UDP logger's port that couldn't be used.
+	UDPError *udpError
+}
+
+// udpError is a refused port, in words, with what was typed kept for correcting.
+type udpError struct {
+	Kind    udplog.Kind
+	Message string
+	Port    string
+}
+
+// udpView is one UDP logger's card and status, which both kinds share.
+type udpView struct {
+	// ID tells this card's fields apart from the other's.
+	ID        string
+	Action    string
+	FormToken string
+	Logger    app.UDPLogger
+	Words     udpWords
+	// Error is why the typed Port wasn't used.
+	Error string
+	Port  string
+}
+
+func (v view) udp(kind udplog.Kind, id string, logger app.UDPLogger, words udpWords) udpView {
+	card := udpView{ID: id, Action: "/" + id, FormToken: v.FormToken, Logger: logger, Words: words, Port: strconv.Itoa(logger.Port)}
+	if v.UDPError != nil && v.UDPError.Kind == kind {
+		card.Error, card.Port = v.UDPError.Message, v.UDPError.Port
+	}
+	return card
+}
+
+// WSJTX is the WSJT-X listener's part of the page.
+func (v view) WSJTX() udpView {
+	return v.udp(udplog.WSJTX, "wsjtx", v.Status.WSJTX, wsjtxWords)
+}
+
+// UDPADIF is the plain ADIF listener's part of the page.
+func (v view) UDPADIF() udpView {
+	return v.udp(udplog.ADIF, "udp-adif", v.Status.UDPADIF, udpADIFWords)
 }
 
 // helpView is the wording behind one ? button.
@@ -323,6 +367,33 @@ func (s *Server) n1mm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) udpLogger(kind udplog.Kind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		typed := strings.TrimSpace(r.PostFormValue("port"))
+		// No port, as when the box is ticked before the field shows, keeps the one it has.
+		port, err := 0, error(nil)
+		if typed != "" {
+			if port, err = strconv.Atoi(typed); err != nil {
+				err = app.ErrBadPort
+			}
+		}
+		if err == nil {
+			err = s.backend.SetUDPLogger(kind, r.PostFormValue("enabled") != "", r.PostFormValue("on_network") != "", port)
+		}
+		switch {
+		case err == nil:
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+		case errors.Is(err, app.ErrBadPort):
+			s.render(w, r, pageTemplate, view{UDPError: &udpError{Kind: kind, Message: pageWords.PortBad, Port: typed}})
+		case errors.Is(err, app.ErrPortTaken):
+			s.render(w, r, pageTemplate, view{UDPError: &udpError{Kind: kind, Message: pageWords.PortTaken, Port: typed}})
+		default:
+			s.log.Error("saving the UDP logger settings failed", "source", kind.Source(), "error", err)
+			s.render(w, r, pageTemplate, view{ActionError: true})
+		}
+	}
 }
 
 func (s *Server) station(w http.ResponseWriter, r *http.Request) {

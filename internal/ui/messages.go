@@ -157,6 +157,37 @@ func fileBadgeClass(state logfile.State) string {
 // PageTitle is the page's title, which is how its window is found again.
 func PageTitle() string { return pageWords.Title }
 
+// networkSendLabel lets other PCs reach a listener that only receives contacts.
+const networkSendLabel = "Let other PCs send contacts"
+
+// udpWords is the wording of one UDP logger's card and status.
+type udpWords struct {
+	Heading, SetupHeading, EnableLabel, Help    string
+	NetworkLabel, NetworkHelp, Blocked, Dropped string
+}
+
+var wsjtxWords = udpWords{
+	Heading:      "WSJT-X and JTDX",
+	SetupHeading: "WSJT-X and JTDX setup",
+	EnableLabel:  "Receive WSJT-X and JTDX contacts",
+	Help:         "Set WSJT-X or JTDX to send contacts by UDP to 127.0.0.1, port %d. Keep the relay running while you log.",
+	NetworkLabel: networkSendLabel,
+	NetworkHelp:  "On the other PCs, set WSJT-X or JTDX to send contacts by UDP to this computer's address on port %d.",
+	Blocked:      "The relay can't listen on UDP port %d and will keep trying. Check whether another program is using that port.",
+	Dropped:      "The relay couldn't keep %d UDP messages. Use Add log file to collect missing contacts from your logger's ADIF log.",
+}
+
+var udpADIFWords = udpWords{
+	Heading:      "ADIF over UDP",
+	SetupHeading: "ADIF over UDP setup",
+	EnableLabel:  "Receive ADIF contacts over UDP",
+	Help:         "Set your logger to send each logged contact as ADIF over UDP to 127.0.0.1, port %d. Keep the relay running while you log.",
+	NetworkLabel: networkSendLabel,
+	NetworkHelp:  "On the other PCs, set your logger to send ADIF over UDP to this computer's address on port %d.",
+	Blocked:      "The relay can't listen on UDP port %d and will keep trying. Check whether another program is using that port.",
+	Dropped:      "The relay couldn't keep %d UDP messages. Use Add log file to collect missing contacts from your logger's ADIF log.",
+}
+
 // pageText is the wording of the page that isn't a status or an error.
 type pageText struct {
 	Title, ServerHeading, LoggerHeading, QueueHeading, AttentionHeading string
@@ -193,6 +224,7 @@ type pageText struct {
 	N3FJPOffText, N3FJPUseButton, HelpLabel, EnrollMore                 string
 	StationNewOption, ListenWarning, N1MMNetworkWarning                 string
 	StartupHeading, StartAtLoginLabel                                   string
+	PortLabel, PortHelp, PortBad, PortTaken                             string
 	StartAtLoginOtherCopy, StartAtLoginTurnedOff                        string
 }
 
@@ -290,7 +322,7 @@ var pageWords = pageText{
 	N1MMEnableLabel:       "Receive N1MM contacts",
 	N1MMHelp:              "In N1MM's Entry Window, open Config > Configure Ports. Select the Broadcast Data tab, check Contacts, and set the address to 127.0.0.1:12060.",
 	N1MMLimits:            "Contacts, edits, and deletes go to Field Day Commander, but nothing goes back to N1MM Logger+. To recover contacts logged while the relay was closed, use Tools > Rebroadcast all Contest QSO's to other Apps in N1MM Logger+.",
-	N1MMNetworkLabel:      "Let other PCs send contacts",
+	N1MMNetworkLabel:      networkSendLabel,
 	N1MMNetworkWarning:    "No password. Use only your club's network. Never forward this port from the internet.",
 	N1MMNetworkHelp:       "On the other PCs, set N1MM Logger+ to send contacts to this computer's address on port 12060.",
 	N1MMListeningPill:     "Listening",
@@ -305,6 +337,10 @@ var pageWords = pageText{
 	LogFileChooseFailed:   "The relay couldn't open the file window. Try Add log file again. See relay.log in the relay's data folder for details.",
 	LogFilesFullText:      "The relay can watch up to 16 files.",
 	LogFileLastRead:       "Last read",
+	PortLabel:             "Port",
+	PortHelp:              "Choose a different port if another program is using this one. Set your logger to send to the same port.",
+	PortBad:               "Enter a port number from 1 to 65535.",
+	PortTaken:             "That port is reserved for another logger in the relay. Choose a different port.",
 	StartupHeading:        "Start at sign-in",
 	StartAtLoginLabel:     "Start the relay when I sign in to Windows",
 	StartAtLoginOtherCopy: "Windows is set to start the relay from another location or with different settings: %s. Check the box to use the relay you're running now.",

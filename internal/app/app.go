@@ -35,6 +35,7 @@ import (
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
 	"github.com/ckoval7/fielddaycommander-relay/internal/sender"
 	"github.com/ckoval7/fielddaycommander-relay/internal/settings"
+	"github.com/ckoval7/fielddaycommander-relay/internal/udplog"
 )
 
 const (
@@ -100,6 +101,12 @@ var ErrBadStation = errors.New("station name isn't usable")
 // allowed to create it.
 var ErrStationNotAllowed = errors.New("station isn't on the server")
 
+// ErrBadPort means a port isn't a number from 1 to 65535.
+var ErrBadPort = errors.New("port must be from 1 to 65535")
+
+// ErrPortTaken means another of the relay's UDP listeners has that port.
+var ErrPortTaken = errors.New("another listener uses that port")
+
 var errNoFileWindow = errors.New("this build has no file window")
 
 var errNoAutostart = errors.New("this build can't start at sign-in")
@@ -136,6 +143,9 @@ type Status struct {
 	N1MMEnabled   bool
 	N1MMOnNetwork bool
 	N1MM          n1mm.Status
+	// WSJTX and UDPADIF are the loggers that send contacts over UDP.
+	WSJTX   UDPLogger
+	UDPADIF UDPLogger
 	// ChoosingLogFile is whether the file window is showing.
 	ChoosingLogFile bool
 	// LogFileChooseFailed is whether the last try at choosing a file went wrong.
@@ -146,6 +156,15 @@ type Status struct {
 	Station string
 	// StationOverride is whether Station also replaces what contacts name themselves.
 	StationOverride bool
+}
+
+// UDPLogger is the settings and state of one UDP listener.
+type UDPLogger struct {
+	Enabled   bool
+	OnNetwork bool
+	// Port is the port it listens on, or would if it were on.
+	Port int
+	udplog.Status
 }
 
 // Config is what New needs.
@@ -192,6 +211,16 @@ type App struct {
 	n1mmRunning  sync.WaitGroup
 	wakeTarget   atomic.Pointer[sender.Sender]
 	chooseFailed bool
+
+	// udp holds the UDP loggers by kind. Like N1MM, they keep listening through
+	// every other change.
+	udp [2]udpListener
+}
+
+type udpListener struct {
+	listener *udplog.Listener
+	cancel   context.CancelFunc
+	running  sync.WaitGroup
 }
 
 // New opens the relay's data. Call Run to start it.
@@ -213,6 +242,8 @@ func (a *App) Run(ctx context.Context) error {
 	a.alive = ctx.Err() == nil
 	a.restartLocked()
 	a.startN1MMLocked()
+	a.startUDPLocked(udplog.WSJTX)
+	a.startUDPLocked(udplog.ADIF)
 	a.mu.Unlock()
 
 	<-ctx.Done()
@@ -222,6 +253,8 @@ func (a *App) Run(ctx context.Context) error {
 	a.alive = false
 	a.stopLocked()
 	a.stopN1MMLocked()
+	a.stopUDPLocked(udplog.WSJTX)
+	a.stopUDPLocked(udplog.ADIF)
 	return a.queue.Close()
 }
 
@@ -339,6 +372,112 @@ func (a *App) SetN1MM(enabled, onNetwork bool) error {
 		a.startN1MMLocked()
 	}
 	return nil
+}
+
+// udpSettings is where the settings for a kind of UDP logger are kept.
+type udpSettings struct {
+	enabled, onNetwork *bool
+	// port is zero for the kind's default.
+	port *int
+}
+
+func udpSettingsOf(s *settings.Settings, kind udplog.Kind) udpSettings {
+	if kind == udplog.WSJTX {
+		return udpSettings{&s.WSJTXEnabled, &s.WSJTXOnNetwork, &s.WSJTXPort}
+	}
+	return udpSettings{&s.UDPADIFEnabled, &s.UDPADIFOnNetwork, &s.UDPADIFPort}
+}
+
+// udpPortLocked is the port a kind of UDP logger uses with the current settings.
+func (a *App) udpPortLocked(kind udplog.Kind) int {
+	if port := *udpSettingsOf(&a.current, kind).port; port != 0 {
+		return port
+	}
+	return kind.DefaultPort()
+}
+
+// udpPortTakenLocked reports whether port belongs to another of the relay's UDP
+// listeners. Two can't share one, and one that's off may be turned on later.
+func (a *App) udpPortTakenLocked(kind udplog.Kind, port int) bool {
+	for _, other := range []udplog.Kind{udplog.WSJTX, udplog.ADIF} {
+		if other != kind && a.udpPortLocked(other) == port {
+			return true
+		}
+	}
+	_, n1mmPort, _ := net.SplitHostPort(n1mm.LocalAddress)
+	return strconv.Itoa(port) == n1mmPort
+}
+
+func (a *App) startUDPLocked(kind udplog.Kind) {
+	slot := &a.udp[kind]
+	slot.listener = nil
+	saved := udpSettingsOf(&a.current, kind)
+	if !*saved.enabled {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	slot.cancel = cancel
+	listener := udplog.New(kind, kind.Address(*saved.onNetwork, *saved.port), a.queue, a.wakeSender, a.cfg.Log)
+	slot.listener = listener
+	slot.running.Go(func() { listener.Run(ctx) })
+}
+
+func (a *App) stopUDPLocked(kind udplog.Kind) {
+	slot := &a.udp[kind]
+	if slot.cancel != nil {
+		slot.cancel()
+		slot.running.Wait()
+		slot.cancel = nil
+	}
+}
+
+// SetUDPLogger saves whether to listen for a kind of UDP logger, whether other PCs
+// can reach the listener, and its port, where 0 keeps the one it has. Saving what's
+// already set changes nothing.
+func (a *App) SetUDPLogger(kind udplog.Kind, enabled, onNetwork bool, port int) error {
+	onNetwork = onNetwork && enabled
+	if port < 0 || port > 65535 {
+		return ErrBadPort
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if port == 0 {
+		port = a.udpPortLocked(kind)
+	}
+	if a.udpPortTakenLocked(kind, port) {
+		return ErrPortTaken
+	}
+	// The default is kept as zero, so it stays whatever the server's default is.
+	if port == kind.DefaultPort() {
+		port = 0
+	}
+	was := udpSettingsOf(&a.current, kind)
+	if enabled == *was.enabled && onNetwork == *was.onNetwork && port == *was.port {
+		return nil
+	}
+	next := a.current
+	changed := udpSettingsOf(&next, kind)
+	*changed.enabled, *changed.onNetwork, *changed.port = enabled, onNetwork, port
+	if err := settings.Save(a.cfg.DataDir, next); err != nil {
+		return err
+	}
+	a.current = next
+
+	a.stopUDPLocked(kind)
+	if a.alive {
+		a.startUDPLocked(kind)
+	}
+	return nil
+}
+
+func (a *App) udpStatusLocked(kind udplog.Kind) UDPLogger {
+	saved := udpSettingsOf(&a.current, kind)
+	status := UDPLogger{Enabled: *saved.enabled, OnNetwork: *saved.onNetwork, Port: a.udpPortLocked(kind)}
+	if listener := a.udp[kind].listener; listener != nil {
+		status.Status = listener.Status()
+	}
+	return status
 }
 
 func (a *App) startFilesLocked(notify func()) {
@@ -738,6 +877,8 @@ func (a *App) Status(ctx context.Context) (Status, error) {
 	if a.n1mm != nil {
 		status.N1MM = a.n1mm.Status()
 	}
+	status.WSJTX = a.udpStatusLocked(udplog.WSJTX)
+	status.UDPADIF = a.udpStatusLocked(udplog.ADIF)
 	status.ChoosingLogFile = a.choosing
 	status.LogFileChooseFailed = a.chooseFailed
 	status.LogFilesFull = len(a.current.LogFiles) >= maxLogFiles

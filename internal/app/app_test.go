@@ -22,6 +22,7 @@ import (
 	"github.com/ckoval7/fielddaycommander-relay/internal/logfile"
 	"github.com/ckoval7/fielddaycommander-relay/internal/secret"
 	"github.com/ckoval7/fielddaycommander-relay/internal/settings"
+	"github.com/ckoval7/fielddaycommander-relay/internal/udplog"
 )
 
 // memoryStore stands in for the keychain.
@@ -789,6 +790,115 @@ func TestN1MMStartsOnlyWhenAskedAndSurvivesOtherChanges(t *testing.T) {
 	status, _ = h.app.Status(context.Background())
 	if status.N1MMEnabled || status.N1MMOnNetwork || status.N1MM.Listening {
 		t.Errorf("status = %+v", status)
+	}
+}
+
+func TestUDPLoggersStartOnlyWhenAskedAndOnlyEachOther(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	listener := func(kind udplog.Kind) *udplog.Listener {
+		h.app.mu.RLock()
+		defer h.app.mu.RUnlock()
+		return h.app.udp[kind].listener
+	}
+	if listener(udplog.WSJTX) != nil || listener(udplog.ADIF) != nil {
+		t.Fatal("listening without being asked")
+	}
+
+	// The network setting means nothing while the listener is off.
+	if err := h.app.SetUDPLogger(udplog.WSJTX, false, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.SetUDPLogger(udplog.ADIF, true, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := settings.Load(h.dir)
+	if !saved.WSJTXEnabled || saved.WSJTXOnNetwork || !saved.UDPADIFEnabled || !saved.UDPADIFOnNetwork {
+		t.Errorf("saved = %+v", saved)
+	}
+	wsjtx := listener(udplog.WSJTX)
+	if wsjtx == nil || listener(udplog.ADIF) == nil {
+		t.Fatal("not started")
+	}
+
+	// Other changes, and the other listener's, must not close this one's port.
+	if err := h.app.SetLogger(RoleOff, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.SetUDPLogger(udplog.ADIF, true, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if listener(udplog.WSJTX) != wsjtx {
+		t.Error("WSJT-X was restarted")
+	}
+
+	if err := h.app.SetUDPLogger(udplog.WSJTX, false, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := h.app.Status(context.Background())
+	if status.WSJTX.Enabled || status.WSJTX.Listening || !status.UDPADIF.Enabled || status.UDPADIF.OnNetwork {
+		t.Errorf("status = %+v %+v", status.WSJTX, status.UDPADIF)
+	}
+}
+
+func TestUDPLoggerPorts(t *testing.T) {
+	h := start(t, t.TempDir(), &memoryStore{})
+	port := func(kind udplog.Kind) int {
+		status, _ := h.app.Status(context.Background())
+		if kind == udplog.WSJTX {
+			return status.WSJTX.Port
+		}
+		return status.UDPADIF.Port
+	}
+	if port(udplog.WSJTX) != 2237 || port(udplog.ADIF) != 2238 {
+		t.Fatalf("defaults are %d and %d", port(udplog.WSJTX), port(udplog.ADIF))
+	}
+
+	for _, bad := range []int{-1, 65536} {
+		if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, bad); !errors.Is(err, ErrBadPort) {
+			t.Errorf("port %d: %v", bad, err)
+		}
+	}
+	for _, taken := range []int{2238, 12060} {
+		if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, taken); !errors.Is(err, ErrPortTaken) {
+			t.Errorf("port %d: %v", taken, err)
+		}
+	}
+
+	if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, 2333); err != nil {
+		t.Fatal(err)
+	}
+	h.app.mu.RLock()
+	listener := h.app.udp[udplog.WSJTX].listener
+	h.app.mu.RUnlock()
+	// Turning it off and on keeps the port it was given.
+	if err := h.app.SetUDPLogger(udplog.WSJTX, false, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.SetUDPLogger(udplog.WSJTX, true, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := settings.Load(h.dir); saved.WSJTXPort != 2333 || port(udplog.WSJTX) != 2333 || listener == nil {
+		t.Errorf("saved port %d, status port %d", saved.WSJTXPort, port(udplog.WSJTX))
+	}
+	// The other listener can't take it now, but can have the default WSJT-X gave up.
+	if err := h.app.SetUDPLogger(udplog.ADIF, false, false, 2333); !errors.Is(err, ErrPortTaken) {
+		t.Errorf("shared port: %v", err)
+	}
+	if err := h.app.SetUDPLogger(udplog.ADIF, false, false, 2237); err != nil {
+		t.Errorf("free port: %v", err)
+	}
+	// Picking the default again saves it as the default.
+	if err := h.app.SetUDPLogger(udplog.ADIF, false, false, 2238); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := settings.Load(h.dir); saved.UDPADIFPort != 0 {
+		t.Errorf("the default was saved as %d", saved.UDPADIFPort)
 	}
 }
 

@@ -90,7 +90,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 <div id="log-files" aria-live="polite">{{template "logfiles" .}}</div>
 
-<div class="grid gap-4 lg:grid-cols-2 items-start">
+<!-- Columns, not a grid: cards grow as listeners are turned on, and columns keep both sides even. -->
+<div class="lg:columns-2 gap-4 -mb-4 *:mb-4 *:break-inside-avoid">
 <section class="card card-border bg-base-100">
 <div class="card-body">
 <h2 class="card-title text-base">{{text.SetupHeading}}</h2>
@@ -156,6 +157,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </form>
 </div>
 </section>
+{{template "udp-setup" .WSJTX}}
+{{template "udp-setup" .UDPADIF}}
 </div>
 
 {{if .StartAtLogin.Available}}
@@ -182,6 +185,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 {{if and .Status.Enrolled (ne .Status.Sender.State "online")}}<output class="alert alert-soft {{if eq (senderBadge .Status.Sender.State) "badge-error"}}alert-error{{end}}">{{senderState .Status.Sender.State}}</output>{{end}}
 {{if and .Status.N1MMEnabled (not .Status.N1MM.Listening)}}<output class="alert alert-error alert-soft">{{text.N1MMBlocked}}</output>{{end}}
 {{if .Status.N1MM.Dropped}}<output class="alert alert-warning alert-soft">{{printf text.N1MMDropped .Status.N1MM.Dropped}}</output>{{end}}
+{{template "udp-alerts" .WSJTX}}
+{{template "udp-alerts" .UDPADIF}}
 {{if .Status.N3FJPOff}}
 {{else if .Status.ServerRole}}{{if not .Status.N3FJPServer.Listening}}<output class="alert alert-error alert-soft">{{text.ServerRoleFailed}}</output>{{end}}
 {{else if not .Status.Source.Connected}}<output class="alert alert-warning alert-soft">{{text.LoggerConnecting}}</output>
@@ -231,6 +236,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 {{end}}
 </div>
 {{end}}
+{{template "udp-stat" .WSJTX}}
+{{template "udp-stat" .UDPADIF}}
 <div class="stat">
 <div class="stat-title">{{text.Waiting}}</div>
 <div class="stat-value">{{.Status.Counts.Pending}}</div>
@@ -261,6 +268,57 @@ SPDX-License-Identifier: GPL-3.0-or-later
 </div>
 </div>
 </section>
+{{end}}
+{{end}}
+
+{{define "udp-setup"}}
+<section class="card card-border bg-base-100">
+<div class="card-body">
+<h2 class="card-title text-base">{{.Words.SetupHeading}}</h2>
+<form method="post" action="{{.Action}}" class="flex flex-col gap-3">
+<input type="hidden" name="form_token" value="{{.FormToken}}">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="enabled" data-autosave{{if .Logger.Enabled}} checked{{end}}> {{.Words.EnableLabel}}</label>
+{{if .Logger.Enabled}}{{template "help" (help .Words.EnableLabel (printf .Words.Help .Logger.Port))}}{{end}}
+</div>
+{{if .Logger.Enabled}}
+<div class="flex flex-col gap-1">
+<div class="relative flex items-center gap-2">
+<label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" name="on_network" data-autosave{{if .Logger.OnNetwork}} checked{{end}}> {{.Words.NetworkLabel}}</label>
+{{template "help" (help .Words.NetworkLabel (printf .Words.NetworkHelp .Logger.Port))}}
+</div>
+<p class="text-sm opacity-70">{{text.N1MMNetworkWarning}}</p>
+</div>
+<div>
+<div class="relative flex items-center gap-2 mb-1">
+<label for="{{.ID}}-port" class="text-sm font-medium">{{text.PortLabel}}</label>
+{{template "help" (help text.PortLabel text.PortHelp)}}
+</div>
+{{with .Error}}<div class="alert alert-error mb-2" role="alert">{{.}}</div>{{end}}
+<div class="flex gap-2"><input id="{{.ID}}-port" class="input w-32" name="port" type="number" min="1" max="65535" inputmode="numeric" value="{{.Port}}" autocomplete="off"><button type="submit" class="btn btn-primary">{{text.RoleButton}}</button></div>
+</div>
+{{end}}
+</form>
+</div>
+</section>
+{{end}}
+
+{{define "udp-alerts"}}
+{{if and .Logger.Enabled (not .Logger.Listening)}}<output class="alert alert-error alert-soft">{{printf .Words.Blocked .Logger.Port}}</output>{{end}}
+{{if .Logger.Dropped}}<output class="alert alert-warning alert-soft">{{printf .Words.Dropped .Logger.Dropped}}</output>{{end}}
+{{end}}
+
+{{define "udp-stat"}}
+{{if .Logger.Enabled}}
+<div class="stat">
+<div class="stat-title">{{.Words.Heading}}</div>
+{{if .Logger.Listening}}
+<div class="py-1"><span class="badge badge-success">{{text.N1MMListeningPill}}</span></div>
+<div class="stat-desc">{{text.N1MMContacts}}: {{.Logger.Contacts}}{{with shortTime .Logger.LastContact}} · {{text.N1MMLastContact}}: {{.}}{{end}}{{with .Logger.Outside}} · {{text.LogFileOutside}}: {{.}}{{end}}</div>
+{{else}}
+<div class="py-1"><span class="badge badge-error">{{text.N1MMBlockedPill}}</span></div>
+{{end}}
+</div>
 {{end}}
 {{end}}
 
