@@ -22,6 +22,22 @@ Write like an experienced, approachable engineer helping another person get some
 - Don't add filler to make a page feel complete. Cover what the reader actually needs, and cover it well.
 - Assume the reader is intelligent but may be new to the relay.
 
+### Length
+
+Nobody reads long text in a program, least of all on Field Day morning. These are limits, not targets:
+
+- **Labels and buttons:** a few words.
+- **Help behind a ? button:** one or two short sentences.
+- **Status, warning, and error messages:** what happened and what to do, in one or two short sentences.
+- **Installer pages and pop-ups:** two or three short sentences.
+- **Changelog entries:** one or two sentences on what someone can now do or will see.
+
+Pick the one or two things this reader needs right now, and leave out the rest, even if it's true. Never cut what they need to finish the job: menu paths, where a code comes from, or how to recover lost contacts. A setup step may run a sentence over the limit. Don't list what a feature doesn't do unless someone would otherwise get hurt by it. Don't explain why Windows behaves as it does. A rare case belongs in the message that appears when it happens, not in help everyone has to read first. Longer explanations go in the README or a guide.
+
+### Words the reader would use
+
+Name things as the reader sees them, never as the code does. "This copy", "instance", "entry", "the program file", and "data folder" mean nothing to someone on a status page. Say "the relay". If a sentence only makes sense to someone who has read the code, rewrite it or cut it.
+
 ### Accuracy
 
 - Never invent commands, configuration options, prerequisites, menu paths, labels, or behavior. Check them in this repo's source first, and in the app at `/home/corey/fielddaycommander` for anything about the server.
@@ -104,6 +120,7 @@ Also avoid:
 
 ## Before you finish
 
-1. Search your changes for `—`, `&mdash;`, ` -- `, and the banned words. Rewrite anything you find.
-2. Read each new paragraph aloud in your head. If it sounds like a press release, cut it down.
-3. Check that every label, setting and message matches the source.
+1. Check each string against the length limits, then try removing each sentence in turn. If the reader can still act without it, leave it out.
+2. Search your changes for `—`, `&mdash;`, ` -- `, and the banned words. Rewrite anything you find.
+3. Read each new paragraph aloud in your head. If it sounds like a press release, cut it down.
+4. Check that every label, setting and message matches the source.
