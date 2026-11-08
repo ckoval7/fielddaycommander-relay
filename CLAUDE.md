@@ -12,7 +12,7 @@ The core exists under `internal/`: contact rules (`contact`), durable queue (`qu
 
 Go, built as a single binary with no runtime. Keep `CGO_ENABLED=0` for release builds so cross-compiling stays simple, and prefer pure-Go dependencies (`modernc.org/sqlite`, not `mattn/go-sqlite3`). Ask before adding a dependency, since every one ships to operators' computers.
 
-The UI is a small settings and status page served on localhost, plus a tray icon. It uses Go templates with Tailwind and daisyUI, with the same themes as Field Day Commander. The stylesheet is compiled and committed, so a plain Go build needs no Node.js. After changing `internal/ui/styles/app.css` or the page's classes, run `scripts/build-css.cjs` (versions are in `package.json`). `internal/ui/styles/theme.css` is generated from the app's stylesheet by `scripts/sync-theme.cjs`, so change colors in the app, and `--check` reports any drift.
+The UI is a small settings and status page served on localhost, plus a tray icon. On Windows it opens in its own Edge app window (`appwindow`), found again by its exact title so it never piles up tabs, with the default browser as the fallback. It uses Go templates with Tailwind and daisyUI, with the same themes as Field Day Commander. The stylesheet is compiled and committed, so a plain Go build needs no Node.js. After changing `internal/ui/styles/app.css` or the page's classes, run `scripts/build-css.cjs` (versions are in `package.json`). `internal/ui/styles/theme.css` is generated from the app's stylesheet by `scripts/sync-theme.cjs`, so change colors in the app, and `--check` reports any drift.
 
 ## Where it runs
 

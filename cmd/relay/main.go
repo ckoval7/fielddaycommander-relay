@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ckoval7/fielddaycommander-relay/internal/app"
+	"github.com/ckoval7/fielddaycommander-relay/internal/appwindow"
 	"github.com/ckoval7/fielddaycommander-relay/internal/autostart"
 	"github.com/ckoval7/fielddaycommander-relay/internal/filepicker"
 	"github.com/ckoval7/fielddaycommander-relay/internal/instance"
@@ -177,7 +178,7 @@ func run() error {
 	})
 
 	if !*noBrowser {
-		openBrowser(url, log)
+		openPage(url, log)
 	}
 
 	// If the tray can't start, the relay keeps working without it: collecting
@@ -187,7 +188,7 @@ func run() error {
 		Tooltip:      ui.TrayText.Tooltip,
 		OpenLabel:    ui.TrayText.Open,
 		QuitLabel:    ui.TrayText.Quit,
-		OnOpen:       func() { openBrowser(url, log) },
+		OnOpen:       func() { openPage(url, log) },
 		OnQuit:       stop,
 	})
 	if err != nil {
@@ -349,7 +350,7 @@ func openRunningPage(ctx context.Context, dir string, log *slog.Logger) {
 		}
 		for _, port := range []int{preferredPort, savedPort(dir)} {
 			if port != 0 && relayIsAnswering(ctx, port) {
-				openBrowser(pageURL(port), log)
+				openPage(pageURL(port), log)
 				return
 			}
 		}
@@ -377,6 +378,19 @@ func relayIsAnswering(ctx context.Context, port int) bool {
 
 func pageURL(port int) string {
 	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) + "/"
+}
+
+// openPage shows the page in its own window, which can be brought forward next time
+// instead of adding another tab. Without one, the default browser still shows it.
+func openPage(url string, log *slog.Logger) {
+	err := appwindow.Show(url, ui.PageTitle())
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, appwindow.ErrUnavailable) {
+		log.Warn("couldn't show the page in its own window", "error", err)
+	}
+	openBrowser(url, log)
 }
 
 func openBrowser(url string, log *slog.Logger) {
