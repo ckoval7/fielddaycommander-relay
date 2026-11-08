@@ -57,17 +57,16 @@ The options **Let other PCs connect** (N3FJP) and **Let other PCs send contacts*
 
 ## Build from source
 
-Use Go 1.27.3, as specified in `go.mod`. The stylesheet is committed, so a plain Go build doesn't need Node.js. From the repo root, build for Windows with these commands in a POSIX shell:
+To build Field Day Commander Relay for Windows, run these commands from the repo root in a POSIX shell with Docker available:
 
 ```sh
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H=windowsgui" -o relay.exe ./cmd/relay
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H=windowsgui -X main.portable=true" -o relay-portable.exe ./cmd/relay
-go test ./...
+scripts/build-windows.sh
+scripts/go.sh test ./...
 ```
 
-Keep `CGO_ENABLED=0` for release builds. The tests run for your host platform. `scripts/go.sh` is also available for running Go in a container.
+The build creates `dist/relay-portable.exe` (the portable version) and `dist/relay-setup.exe` (the installer). Go runs in a container.
 
-To build the installer, first build the Windows program as `dist/relay.exe`. Then run `scripts/build-installer.sh` to create `dist/relay-setup.exe`, using NSIS's `makensis` if installed, or a container otherwise.
+The installer build uses NSIS's `makensis` if installed, or a container otherwise.
 
 Branch flow: feature branch → `dev` → `main`.
 
