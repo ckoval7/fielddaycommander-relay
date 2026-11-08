@@ -79,7 +79,7 @@ Activate the `branch-workflow` skill before you start, commit or merge work, run
 - **Commits:** Conventional Commits, describing the change in plain words (`fix(queue): keep unsent contacts after a restart`).
 - **Changelog:** anything a user could notice gets a `CHANGELOG.md` entry under **Unreleased** in the same branch. Describe fixes by what the person saw and when, not what changed in the code. Skip refactors, typos and CI. Keep the file to release sections, with no intro.
 - **Product name:** Field Day Commander Relay, or "the relay" after the first mention. The server is Field Day Commander. Never "FDC".
-- **User-facing prose** (UI text, error and status messages, README, changelog, guides): send it to the `prose-writer` agent, which follows the `docs-prose` skill.
+- **User-facing prose** (UI text, error and status messages, README, changelog, guides): send it to the `prose-writer` agent, which follows the `docs-prose` skill. Keep the brief to a few lines and point it at the code. Don't draft wording or list what the text must say.
 - Only create documentation files when asked.
 
 ## Releases
