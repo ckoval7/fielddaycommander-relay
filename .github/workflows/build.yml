@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Checks main and builds the relay and its Windows installer, keeping them as run
-# artifacts. Release tags build too, stamped with their version. Nothing is published.
+# artifacts. Release tags build too, stamped with their version, and get a draft
+# release with the files attached. Nothing is published until someone publishes it.
 #
 # Actions are pinned to commit SHAs; the comment names the release.
 name: Build
@@ -129,3 +130,42 @@ jobs:
           name: fielddaycommander-relay-${{ env.VERSION }}-${{ matrix.goos }}-amd64
           path: dist/
           if-no-files-found: error
+
+  # A draft, so someone can check it before it's public. The notes are the tag's
+  # section of CHANGELOG.md.
+  draft-release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Gather the files and notes
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v heading="## $version " 'index($0, heading) == 1 { found = 1; next } found && /^## / { exit } found' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no notes under a \"## $version\" heading"
+            exit 1
+          fi
+          mkdir release
+          mv artifacts/relay-setup.exe artifacts/relay-portable.exe release/
+          mv artifacts/relay release/relay-linux-amd64
+          (cd release && sha256sum -- * > SHA256SUMS)
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "Field Day Commander Relay ${GITHUB_REF_NAME#v}" --notes-file notes.md

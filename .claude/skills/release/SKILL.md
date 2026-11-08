@@ -7,9 +7,9 @@ description: Use this skill to release Field Day Commander Relay. Triggers inclu
 
 Run the steps in order, and don't bump the version early. Relay versions are independent of the app's.
 
-The build workflow makes both Windows versions with each build: the installer (`scripts/build-installer.sh`, `installer/relay.nsi`) and `relay-portable.exe`. Code signing isn't set up yet, so Windows warns about the installer. When signing is set up, add it here. Don't improvise it during a release.
+The build workflow makes both Windows versions with each build: the installer (`scripts/build-installer.sh`, `installer/relay.nsi`) and `relay-portable.exe`. For a `v*` tag it also creates a draft GitHub release with the installer, the portable version, the Linux build and `SHA256SUMS`, using the tag's `CHANGELOG.md` section as notes. Nothing is public until the user publishes the draft. Code signing isn't set up yet, so Windows warns about the installer. When signing is set up, add it here. Don't improvise it during a release.
 
-The `branch-workflow` skill has the `gorun` helper and the merge rules.
+The `branch-workflow` skill has the merge rules and `scripts/go.sh`, which runs Go in a container.
 
 ## 0. Prepare
 
@@ -28,7 +28,7 @@ Fixes in steps 1 and 2 go on short branches off `dev` (`fix/deps-<pkg>`, `chore/
 ## 1. Vulnerability scans (iterate until clean)
 
 ```bash
-gorun go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+scripts/go.sh run golang.org/x/vuln/cmd/govulncheck@latest ./...
 docker run --rm -v "$PWD":/project:ro aquasec/trivy:latest fs --scanners vuln --quiet /project
 ```
 
@@ -39,8 +39,9 @@ Then run the Sonar scan in `branch-workflow` and fix what it finds in the same w
 ## 2. Update dependencies
 
 ```bash
-gorun go list -m -u all     # list available updates first
-gorun go get -u ./... && gorun go mod tidy
+scripts/go.sh list -m -u all     # list available updates first
+scripts/go.sh get -u ./...
+scripts/go.sh mod tidy
 ```
 
 Major version bumps change the import path and possibly behavior, so the user must approve them. List them with what would change, ask, and only bump the ones they approve. Run the full checks from `branch-workflow`, re-run step 1, and commit as `chore(deps): update go modules`.
@@ -59,3 +60,4 @@ Major version bumps change the import path and possibly behavior, so the user mu
 1. Fast-forward `main`: `git switch main && git merge --ff-only dev`, then `git switch dev`.
 2. Create the annotated tag on `main`'s HEAD: `git tag -a vYY.MM.N -m vYY.MM.N`.
 3. Stop and tell the user that `dev`, `main` and the tag are ready to push. Never push them yourself unless the user asks in this session, and never force-push.
+4. After the push, the tag's Build run ends with a draft release. Tell the user to check it and publish it. If Build fails, the tag has no draft; fix the cause on `dev`, and ask the user before moving a pushed tag.
