@@ -52,6 +52,12 @@ Run the Windows build before merging too, since Windows is the primary target:
 scripts/go.sh windows build ./...
 ```
 
+For a build to try on Windows, make both versions people actually get. There's no plain `relay.exe` any more: it only exists inside the installer.
+
+```bash
+scripts/build-windows.sh    # dist/relay-portable.exe and dist/relay-setup.exe
+```
+
 ## Checking licensing
 
 Every new file needs an SPDX header or a `REUSE.toml` entry. This must pass:

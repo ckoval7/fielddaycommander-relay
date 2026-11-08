@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Builds dist/relay-setup.exe from dist/relay.exe. It uses makensis if it's installed,
-# or a container if it isn't.
+# or a container if it isn't. scripts/build-windows.sh builds both Windows versions
+# and calls this, so run that instead.
 #
 #   scripts/build-installer.sh [version]
 set -eu
@@ -19,7 +20,7 @@ case $version in
 esac
 
 if [ ! -f dist/relay.exe ]; then
-	echo "Build dist/relay.exe first." >&2
+	echo "Run scripts/build-windows.sh, which builds dist/relay.exe and then calls this." >&2
 	exit 1
 fi
 

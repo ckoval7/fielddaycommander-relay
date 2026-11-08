@@ -71,6 +71,7 @@ Files that can't hold a comment go in `REUSE.toml`. `reuse lint` must pass (the 
 - **Flow:** feature branch → `dev` → `main`. Never commit directly to `dev` or `main`.
 - **Never push or offer to.** The user pushes.
 - **Go runs in a container,** because the host doesn't have it.
+- **Windows builds are the portable version and the installer,** both from `scripts/build-windows.sh`, as in CI. There's no standalone `relay.exe` to build or hand out, since it only exists inside the installer.
 
 Activate the `branch-workflow` skill before you start, commit or merge work, run Go tooling, or scan with Sonar.
 
