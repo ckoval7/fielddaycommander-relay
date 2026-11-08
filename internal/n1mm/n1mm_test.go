@@ -403,6 +403,20 @@ func TestAFailedSaveKeepsTrying(t *testing.T) {
 	eventually(t, "the contact", func() bool { return l.Status().Contacts == 1 })
 }
 
+func TestWhatIsWaitingIsSavedInOneBatch(t *testing.T) {
+	packets := make(chan []byte, batchPackets+10)
+	for i := range batchPackets + 5 {
+		packets <- []byte{byte(i)}
+	}
+	if got := len(waitingAfter(<-packets, packets)); got != batchPackets {
+		t.Errorf("first batch %d, want %d", got, batchPackets)
+	}
+	close(packets)
+	if got := len(waitingAfter(<-packets, packets)); got != 5 {
+		t.Errorf("second batch %d, want the 5 left", got)
+	}
+}
+
 func TestShuttingDownSavesWhatIsWaiting(t *testing.T) {
 	q := newQueue(t)
 	l := New(LocalAddress, q, nil, quiet())
@@ -414,7 +428,7 @@ func TestShuttingDownSavesWhatIsWaiting(t *testing.T) {
 	cancel()
 	close(packets)
 	for data := range packets {
-		l.save(canceled, data)
+		l.save(canceled, [][]byte{data})
 	}
 	if sent := answerAll(t, q); len(sent) != 2 {
 		t.Errorf("sent %+v", sent)

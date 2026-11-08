@@ -32,7 +32,7 @@ type MirrorRow struct {
 
 // FindMirror looks a contact up by uuid, then by any of the keys.
 func (q *Queue) FindMirror(ctx context.Context, uuid string, keys ...string) (*MirrorRow, error) {
-	row, err := q.scanMirror(q.db.QueryRowContext(ctx, mirrorByUUID, uuid))
+	row, err := q.scanMirror(q.conn(ctx).QueryRowContext(ctx, mirrorByUUID, uuid))
 	if row != nil || err != nil {
 		return row, err
 	}
@@ -40,7 +40,7 @@ func (q *Queue) FindMirror(ctx context.Context, uuid string, keys ...string) (*M
 		if key == "" {
 			continue
 		}
-		row, err = q.scanMirror(q.db.QueryRowContext(ctx, mirrorByKey, key))
+		row, err = q.scanMirror(q.conn(ctx).QueryRowContext(ctx, mirrorByKey, key))
 		if row != nil || err != nil {
 			return row, err
 		}
@@ -84,7 +84,7 @@ func (q *Queue) SaveMirror(ctx context.Context, row MirrorRow) error {
 		}
 		payload = string(encoded)
 	}
-	_, err := q.db.ExecContext(ctx,
+	_, err := q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO mirror (uuid, idempotency_key, derived_key, payload, deleted) VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT (uuid) DO UPDATE SET idempotency_key = excluded.idempotency_key,
 		 derived_key = excluded.derived_key, payload = excluded.payload, deleted = excluded.deleted`,
@@ -131,7 +131,7 @@ func (q *Queue) HasPending(ctx context.Context, keys ...string) (bool, error) {
 			continue
 		}
 		var count int
-		if err := q.db.QueryRowContext(ctx,
+		if err := q.conn(ctx).QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM outbox WHERE state = ?1 AND (idempotency_key = ?2 OR replaces_key = ?2)`,
 			statePending, key).Scan(&count); err != nil {
 			return false, fmt.Errorf("read queue: %w", err)
@@ -151,7 +151,7 @@ func (q *Queue) Remember(ctx context.Context, c contact.Contact) error {
 	if err != nil {
 		return err
 	}
-	_, err = q.db.ExecContext(ctx,
+	_, err = q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO known (idempotency_key, payload_hash) VALUES (?, ?)
 		 ON CONFLICT (idempotency_key) DO UPDATE SET payload_hash = excluded.payload_hash`,
 		c.IdempotencyKey, hash)
@@ -164,7 +164,7 @@ func (q *Queue) Remember(ctx context.Context, c contact.Contact) error {
 // Meta reads a stored value, or "" if there isn't one.
 func (q *Queue) Meta(ctx context.Context, name string) (string, error) {
 	var value string
-	err := q.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE name = ?`, name).Scan(&value)
+	err := q.conn(ctx).QueryRowContext(ctx, `SELECT value FROM meta WHERE name = ?`, name).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -176,7 +176,7 @@ func (q *Queue) Meta(ctx context.Context, name string) (string, error) {
 
 // SetMeta stores a value.
 func (q *Queue) SetMeta(ctx context.Context, name, value string) error {
-	_, err := q.db.ExecContext(ctx,
+	_, err := q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET value = excluded.value`, name, value)
 	if err != nil {
 		return fmt.Errorf("save meta: %w", err)
@@ -217,7 +217,7 @@ func (q *Queue) EventPeriod(ctx context.Context) (start, end time.Time, known bo
 
 // ForgetEventPeriod makes a new enrollment wait for its own event's dates.
 func (q *Queue) ForgetEventPeriod(ctx context.Context) error {
-	if _, err := q.db.ExecContext(ctx, `DELETE FROM meta WHERE name = ?`, eventPeriodName); err != nil {
+	if _, err := q.conn(ctx).ExecContext(ctx, `DELETE FROM meta WHERE name = ?`, eventPeriodName); err != nil {
 		return fmt.Errorf("forget event dates: %w", err)
 	}
 	return nil
@@ -226,7 +226,7 @@ func (q *Queue) ForgetEventPeriod(ctx context.Context) error {
 // Defer holds a server change until its contact's upload is answered. The newest
 // change for a contact replaces any older one.
 func (q *Queue) Defer(ctx context.Context, uuid string, payload []byte) error {
-	_, err := q.db.ExecContext(ctx,
+	_, err := q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO deferred (uuid, payload) VALUES (?, ?) ON CONFLICT (uuid) DO UPDATE SET payload = excluded.payload`,
 		uuid, string(payload))
 	if err != nil {
@@ -237,7 +237,7 @@ func (q *Queue) Defer(ctx context.Context, uuid string, payload []byte) error {
 
 // Deferred returns the held changes.
 func (q *Queue) Deferred(ctx context.Context) (map[string][]byte, error) {
-	rows, err := q.db.QueryContext(ctx, `SELECT uuid, payload FROM deferred`)
+	rows, err := q.conn(ctx).QueryContext(ctx, `SELECT uuid, payload FROM deferred`)
 	if err != nil {
 		return nil, fmt.Errorf("read deferred: %w", err)
 	}
@@ -256,7 +256,7 @@ func (q *Queue) Deferred(ctx context.Context) (map[string][]byte, error) {
 
 // ClearDeferred drops a held change.
 func (q *Queue) ClearDeferred(ctx context.Context, uuid string) error {
-	_, err := q.db.ExecContext(ctx, `DELETE FROM deferred WHERE uuid = ?`, uuid)
+	_, err := q.conn(ctx).ExecContext(ctx, `DELETE FROM deferred WHERE uuid = ?`, uuid)
 	if err != nil {
 		return fmt.Errorf("clear deferred: %w", err)
 	}

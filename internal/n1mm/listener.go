@@ -46,8 +46,11 @@ const (
 	// waitingPackets covers Rebroadcast all Contest QSO's to other Apps, which sends quickly, while each
 	// contact waits to be saved to disk.
 	waitingPackets = 2048
-	retryBind      = 5 * time.Second
-	retryStore     = time.Second
+	// batchPackets is the most saved in one commit. Each commit waits for the disk,
+	// which on a slow PC takes longer than a rebroadcast takes to send a contact.
+	batchPackets = 256
+	retryBind    = 5 * time.Second
+	retryStore   = time.Second
 )
 
 // Store keeps what the listener receives. Put must have made the contact durable
@@ -58,6 +61,8 @@ type Store interface {
 	N1MMRecord(ctx context.Context, id string) (queue.N1MMRecord, bool, error)
 	SaveN1MMRecord(ctx context.Context, record queue.N1MMRecord) error
 	DeleteN1MMRecord(ctx context.Context, id string) error
+	// Batch commits everything work saves through its context together, or nothing.
+	Batch(ctx context.Context, work func(ctx context.Context) error) error
 }
 
 // Status is a snapshot for the status page.
@@ -107,8 +112,8 @@ func (l *Listener) Run(ctx context.Context) {
 	saved := make(chan struct{})
 	go func() {
 		defer close(saved)
-		for data := range packets {
-			l.save(ctx, data)
+		for first := range packets {
+			l.save(ctx, waitingAfter(first, packets))
 		}
 	}()
 
@@ -187,16 +192,33 @@ func (l *Listener) receive(data []byte, packets chan<- []byte) {
 	}
 }
 
-// save keeps trying, because this is the only copy of the packet. Shutting down is
+// waitingAfter returns first and whatever else is already waiting, up to a batch.
+func waitingAfter(first []byte, packets <-chan []byte) [][]byte {
+	batch := [][]byte{first}
+	for len(batch) < batchPackets {
+		select {
+		case data, ok := <-packets:
+			if !ok {
+				return batch
+			}
+			batch = append(batch, data)
+		default:
+			return batch
+		}
+	}
+	return batch
+}
+
+// save keeps trying, because this is the only copy of the packets. Shutting down is
 // the one thing that ends the tries early.
-func (l *Listener) save(ctx context.Context, data []byte) {
+func (l *Listener) save(ctx context.Context, batch [][]byte) {
 	storeCtx := context.WithoutCancel(ctx)
 	for {
-		err := l.handle(storeCtx, parsePacket(data), string(data))
+		err := l.saveBatch(storeCtx, batch)
 		if err == nil {
 			return
 		}
-		l.log.Error("saving an N1MM contact failed", "error", err)
+		l.log.Error("saving N1MM contacts failed", "error", err)
 		if ctx.Err() != nil {
 			return
 		}
@@ -207,14 +229,46 @@ func (l *Listener) save(ctx context.Context, data []byte) {
 	}
 }
 
+// saveBatch saves packets in one commit, then counts what was new. A failed commit
+// saves none of them, and a retry starts over, so nothing is counted twice.
+func (l *Listener) saveBatch(ctx context.Context, batch [][]byte) error {
+	queued := 0
+	err := l.store.Batch(ctx, func(ctx context.Context) error {
+		queued = 0
+		for _, data := range batch {
+			count, err := l.handlePacket(ctx, parsePacket(data), string(data))
+			if err != nil {
+				return err
+			}
+			queued += count
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	l.queued(queued)
+	return nil
+}
+
+// handle saves one packet.
 func (l *Listener) handle(ctx context.Context, parsed packet, raw string) error {
+	queued, err := l.handlePacket(ctx, parsed, raw)
+	if err == nil {
+		l.queued(queued)
+	}
+	return err
+}
+
+// handlePacket saves a packet and returns how many contacts it queued.
+func (l *Listener) handlePacket(ctx context.Context, parsed packet, raw string) (int, error) {
 	if parsed.root == rootDelete {
 		return l.handleDelete(ctx, parsed)
 	}
 	return l.handleContact(ctx, parsed, raw)
 }
 
-func (l *Listener) handleContact(ctx context.Context, parsed packet, raw string) error {
+func (l *Listener) handleContact(ctx context.Context, parsed packet, raw string) (int, error) {
 	candidate, err := parsed.toContact()
 	var normalized contact.Contact
 	if err == nil {
@@ -222,70 +276,75 @@ func (l *Listener) handleContact(ctx context.Context, parsed packet, raw string)
 	}
 	if err != nil {
 		if !errors.Is(err, contact.ErrInvalid) {
-			return err
+			return 0, err
 		}
-		return l.store.PutInvalid(ctx, SourceName, err.Error(), raw)
+		return 0, l.store.PutInvalid(ctx, SourceName, err.Error(), raw)
 	}
 
 	id := parsed.id()
 	if id != "" {
 		previous, found, err := l.store.N1MMRecord(ctx, id)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if found && previous.Key != normalized.IdempotencyKey {
 			normalized.ReplacesKey = previous.Key
 		}
 	}
 
-	if err := l.put(ctx, normalized); err != nil {
-		return err
+	queued, err := l.put(ctx, normalized)
+	if err != nil || id == "" {
+		return queued, err
 	}
-	if id == "" {
-		return nil
-	}
-	return l.store.SaveN1MMRecord(ctx, queue.N1MMRecord{
+	return queued, l.store.SaveN1MMRecord(ctx, queue.N1MMRecord{
 		ID: id, Key: normalized.IdempotencyKey, Callsign: normalized.Callsign, QSOTime: normalized.QSOTime, Station: normalized.Station,
 	})
 }
 
-func (l *Listener) handleDelete(ctx context.Context, parsed packet) error {
+func (l *Listener) handleDelete(ctx context.Context, parsed packet) (int, error) {
 	id := parsed.id()
 	if id == "" {
-		return nil
+		return 0, nil
 	}
 	record, found, err := l.store.N1MMRecord(ctx, id)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !found {
 		// Logged while the relay wasn't listening, so it was never sent from here.
 		l.log.Info("N1MM deleted a contact the relay never saw", "call", cut(parsed.fields["call"]))
-		return nil
+		return 0, nil
 	}
-	if err := l.put(ctx, contact.Contact{
+	queued, err := l.put(ctx, contact.Contact{
 		IdempotencyKey: record.Key, Deleted: true, Callsign: record.Callsign, QSOTime: record.QSOTime, Station: record.Station,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return 0, err
 	}
-	return l.store.DeleteN1MMRecord(ctx, id)
+	return queued, l.store.DeleteN1MMRecord(ctx, id)
 }
 
-func (l *Listener) put(ctx context.Context, c contact.Contact) error {
+// put saves a contact and returns 1 if it was new or changed.
+func (l *Listener) put(ctx context.Context, c contact.Contact) (int, error) {
 	queued, err := l.store.Put(ctx, c)
-	if err != nil {
-		return err
+	if err != nil || !queued {
+		return 0, err
 	}
-	if queued {
-		l.setStatus(func(status *Status) {
-			status.Contacts++
-			status.LastContact = time.Now()
-		})
-		if l.notify != nil {
-			l.notify()
-		}
+	return 1, nil
+}
+
+// queued counts contacts once they're saved, and wakes the sender for them.
+func (l *Listener) queued(count int) {
+	if count == 0 {
+		return
 	}
-	return nil
+	l.setStatus(func(status *Status) {
+		status.Contacts += count
+		status.LastContact = time.Now()
+	})
+	if l.notify != nil {
+		l.notify()
+	}
 }
 
 func (l *Listener) setStatus(change func(*Status)) {
