@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ import (
 
 func open(t *testing.T) *Queue {
 	t.Helper()
-	q, err := Open(filepath.Join(t.TempDir(), "relay #1 queue?.db"))
+	q, err := Open(filepath.Join(t.TempDir(), "relay #1 100% queue&.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,5 +525,46 @@ func TestPickingAStationRetriesOnlyContactsWaitingForOne(t *testing.T) {
 	ready := next(t, q)
 	if len(ready) != 1 || ready[0].ID != items[0].ID {
 		t.Errorf("ready = %+v", ready)
+	}
+}
+
+func TestABatchSavesEverythingOrNothing(t *testing.T) {
+	q := open(t)
+	ctx := context.Background()
+
+	failed := errors.New("disk full")
+	err := q.Batch(ctx, func(ctx context.Context) error {
+		if _, err := q.Put(ctx, normalized(t, "K1ABC")); err != nil {
+			return err
+		}
+		return failed
+	})
+	if !errors.Is(err, failed) || len(next(t, q)) != 0 {
+		t.Fatalf("a failed batch kept something: %v", err)
+	}
+
+	err = q.Batch(ctx, func(ctx context.Context) error {
+		for _, call := range []string{"K1ABC", "W2XYZ"} {
+			if _, err := q.Put(ctx, normalized(t, call)); err != nil {
+				return err
+			}
+		}
+		// The batch sees what it saved, so a contact saved again is recognized.
+		if queued, err := q.Put(ctx, normalized(t, "K1ABC")); err != nil || queued {
+			t.Errorf("saving again inside the batch: %v %v", queued, err)
+		}
+		if err := q.PutInvalid(ctx, "test", "bad", "raw"); err != nil {
+			return err
+		}
+		return q.SaveN1MMRecord(ctx, N1MMRecord{ID: "abc", Key: "key"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, q); len(got) != 2 {
+		t.Errorf("queued %d contacts, want 2", len(got))
+	}
+	if _, found, err := q.N1MMRecord(ctx, "abc"); err != nil || !found {
+		t.Errorf("the N1MM record wasn't saved: %v", err)
 	}
 }

@@ -6,15 +6,18 @@ package udplog
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ckoval7/fielddaycommander-relay/internal/contact"
 	"github.com/ckoval7/fielddaycommander-relay/internal/queue"
 )
 
@@ -326,5 +329,44 @@ func TestTheAddressesAreTheServersDefaults(t *testing.T) {
 		if got := c.kind.Address(c.onNetwork, c.port); got != c.want {
 			t.Errorf("%s on network %v: got %s, want %s", c.kind.Source(), c.onNetwork, got, c.want)
 		}
+	}
+}
+
+// secondPutFails fails the second save it's asked for, once, as a full disk might.
+type secondPutFails struct {
+	*queue.Queue
+	puts atomic.Int32
+}
+
+func (s *secondPutFails) Put(ctx context.Context, c contact.Contact) (bool, error) {
+	if s.puts.Add(1) == 2 {
+		return false, errors.New("disk full")
+	}
+	return s.Queue.Put(ctx, c)
+}
+
+func TestWhatIsWaitingIsSavedTogetherAndCountedOnce(t *testing.T) {
+	q := newQueue(t)
+	store := &secondPutFails{Queue: q}
+	l := New(ADIF, "127.0.0.1:0", store, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	l.storeWait = time.Millisecond
+	second := "<CALL:4>N0XX <QSO_DATE:8>20260627 <TIME_ON:4>1900 <BAND:3>40m <MODE:3>SSB <EOR>"
+
+	waiting := make(chan datagram, 3)
+	waiting <- datagram{data: []byte(record), from: local}
+	waiting <- datagram{data: []byte(second), from: local}
+	batch := waitingAfter(<-waiting, waiting)
+	if len(batch) != 2 {
+		t.Fatalf("batch of %d, want both waiting datagrams", len(batch))
+	}
+
+	// The first contact was saved before the failure, so the retry has to save it
+	// again, and it must still count once.
+	l.save(context.Background(), batch)
+	if items := queued(t, q); len(items) != 2 {
+		t.Fatalf("queued %d contacts, want 2", len(items))
+	}
+	if status := l.Status(); status.Contacts != 2 {
+		t.Errorf("counted %d contacts, want 2", status.Contacts)
 	}
 }

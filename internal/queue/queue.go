@@ -308,7 +308,7 @@ func (q *Queue) PutInvalid(ctx context.Context, source, reason, raw string) erro
 // would be stored as a second contact when the original was retried. A contact
 // waiting on a retry doesn't hold up unrelated ones.
 func (q *Queue) Next(ctx context.Context, limit int) ([]Item, error) {
-	rows, err := q.db.QueryContext(ctx,
+	rows, err := q.conn(ctx).QueryContext(ctx,
 		`SELECT id, idempotency_key, replaces_key, payload, next_attempt_ms FROM outbox WHERE state = ? ORDER BY id`, statePending)
 	if err != nil {
 		return nil, fmt.Errorf("read queue: %w", err)
@@ -399,7 +399,7 @@ func (q *Queue) Apply(ctx context.Context, outcomes []Outcome) error {
 // RetryWaitingForStation sends contacts waiting for a station on the next round
 // instead of after their retry delay, because a person has just changed the station.
 func (q *Queue) RetryWaitingForStation(ctx context.Context) error {
-	if _, err := q.db.ExecContext(ctx,
+	if _, err := q.conn(ctx).ExecContext(ctx,
 		`UPDATE outbox SET next_attempt_ms = 0 WHERE state = ? AND code = 'unknown_station'`, statePending); err != nil {
 		return fmt.Errorf("retry contacts waiting for a station: %w", err)
 	}
@@ -419,7 +419,7 @@ type Attention struct {
 // NeedingAttention returns the newest contacts the server rejected or that wait
 // for a station to be created. Other retries sort themselves out.
 func (q *Queue) NeedingAttention(ctx context.Context, limit int) ([]Attention, error) {
-	rows, err := q.db.QueryContext(ctx,
+	rows, err := q.conn(ctx).QueryContext(ctx,
 		`SELECT payload, state, code, message FROM outbox
 		 WHERE state = ? OR (state = ? AND code = 'unknown_station')
 		 ORDER BY id DESC LIMIT ?`, stateRejected, statePending, limit)
@@ -456,7 +456,7 @@ func (q *Queue) NeedingAttention(ctx context.Context, limit int) ([]Attention, e
 // Counts returns how many contacts are in each state.
 func (q *Queue) Counts(ctx context.Context) (Counts, error) {
 	var counts Counts
-	rows, err := q.db.QueryContext(ctx, `SELECT state, COUNT(*) FROM outbox GROUP BY state`)
+	rows, err := q.conn(ctx).QueryContext(ctx, `SELECT state, COUNT(*) FROM outbox GROUP BY state`)
 	if err != nil {
 		return counts, fmt.Errorf("count queue: %w", err)
 	}
@@ -486,13 +486,53 @@ func (q *Queue) Counts(ctx context.Context) (Counts, error) {
 		return counts, fmt.Errorf("count queue: %w", err)
 	}
 
-	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM invalid`).Scan(&counts.Invalid); err != nil {
+	if err := q.conn(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM invalid`).Scan(&counts.Invalid); err != nil {
 		return counts, fmt.Errorf("count queue: %w", err)
 	}
 	return counts, nil
 }
 
+// batchKey marks a context that carries a batch's transaction for one queue.
+type batchKey struct{ q *Queue }
+
+// conn is what a query runs on: the batch's transaction, or the database.
+type conn interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (q *Queue) conn(ctx context.Context) conn {
+	if tx, ok := ctx.Value(batchKey{q}).(*sql.Tx); ok {
+		return tx
+	}
+	return q.db
+}
+
+// Batch runs work so that everything it saves through the context it's given is
+// committed together, or not at all. Each commit waits for the disk, so a burst of
+// contacts saved one at a time can take longer than they take to arrive. Nothing
+// work saves counts as stored until Batch returns nil. Other callers wait meanwhile,
+// so keep batches short, and use only the context given.
+func (q *Queue) Batch(ctx context.Context, work func(ctx context.Context) error) error {
+	if _, nested := ctx.Value(batchKey{q}).(*sql.Tx); nested {
+		return work(ctx)
+	}
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := work(context.WithValue(ctx, batchKey{q}, tx)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (q *Queue) inTx(ctx context.Context, work func(*sql.Tx) error) error {
+	if tx, ok := ctx.Value(batchKey{q}).(*sql.Tx); ok {
+		return work(tx)
+	}
 	tx, err := q.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

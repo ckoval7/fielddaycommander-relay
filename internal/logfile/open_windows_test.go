@@ -5,10 +5,10 @@ package logfile
 
 import (
 	"io"
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
-	"unsafe"
 )
 
 // A logger that holds its file open and refuses other writers, the strictest way
@@ -51,14 +51,14 @@ func TestALogHeldOpenByALoggerCanBeWatched(t *testing.T) {
 	}
 }
 
-// A logger that saves by replacing the file must not fail because the relay is
-// reading it.
-func TestALogCanBeReplacedWhileItIsBeingRead(t *testing.T) {
+// While the relay reads a log, its logger must still be able to write to it, rename
+// it and delete it. Windows won't let anyone replace a file by name while it's open,
+// so a logger that saves that way waits for the read to end, which takes as long as
+// reading one window.
+func TestALoggerCanChangeItsLogWhileItIsBeingRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "log.adi")
 	writeFile(t, path, "<CALL:5>K1ABC<EOR>")
-	next := filepath.Join(dir, "next.adi")
-	writeFile(t, next, "<CALL:5>W2XYZ<EOR>")
 
 	file, err := openShared(path)
 	if err != nil {
@@ -66,11 +66,21 @@ func TestALogCanBeReplacedWhileItIsBeingRead(t *testing.T) {
 	}
 	defer file.Close()
 
-	from, _ := syscall.UTF16PtrFromString(next)
-	to, _ := syscall.UTF16PtrFromString(path)
-	const moveReplaceExisting = 1
-	kernel := syscall.NewLazyDLL("kernel32.dll").NewProc("MoveFileExW")
-	if result, _, callErr := kernel.Call(uintptr(unsafe.Pointer(from)), uintptr(unsafe.Pointer(to)), moveReplaceExisting); result == 0 {
-		t.Errorf("replace failed: %v", callErr)
+	logger, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("the logger can't open its log: %v", err)
+	}
+	_, err = logger.WriteString("<CALL:5>W2XYZ<EOR>")
+	logger.Close()
+	if err != nil {
+		t.Errorf("the logger can't write: %v", err)
+	}
+
+	moved := filepath.Join(dir, "log.bak")
+	if err := os.Rename(path, moved); err != nil {
+		t.Errorf("the logger can't rename its log: %v", err)
+	}
+	if err := os.Remove(moved); err != nil {
+		t.Errorf("the logger can't delete its log: %v", err)
 	}
 }

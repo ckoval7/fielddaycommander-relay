@@ -52,8 +52,11 @@ const (
 	maxPacketBytes = 16 << 10
 	// waitingPackets covers a burst while each contact waits to be saved to disk.
 	waitingPackets = 1024
-	retryBind      = 5 * time.Second
-	retryStore     = time.Second
+	// batchPackets is the most saved in one commit. Each commit waits for the disk,
+	// which on a slow PC can take longer than a burst takes to arrive.
+	batchPackets = 256
+	retryBind    = 5 * time.Second
+	retryStore   = time.Second
 )
 
 // DefaultPort is the port a kind listens on unless someone picks another.
@@ -94,6 +97,8 @@ type Store interface {
 	// EventPeriod returns the event's dates, or false until the relay has learned
 	// them from the server.
 	EventPeriod(ctx context.Context) (start, end time.Time, known bool, err error)
+	// Batch commits everything work saves through its context together, or nothing.
+	Batch(ctx context.Context, work func(ctx context.Context) error) error
 }
 
 // Status is a snapshot for the status page.
@@ -154,8 +159,8 @@ func (l *Listener) Run(ctx context.Context) {
 	saved := make(chan struct{})
 	go func() {
 		defer close(saved)
-		for received := range waiting {
-			l.save(ctx, received)
+		for first := range waiting {
+			l.save(ctx, waitingAfter(first, waiting))
 		}
 	}()
 
@@ -241,13 +246,30 @@ func (l *Listener) receive(data []byte, from netip.Addr, waiting chan<- datagram
 	}
 }
 
-// save keeps trying, because this is the only copy of the datagram. Saving a
+// waitingAfter returns first and whatever else is already waiting, up to a batch.
+func waitingAfter(first datagram, waiting <-chan datagram) []datagram {
+	batch := []datagram{first}
+	for len(batch) < batchPackets {
+		select {
+		case received, ok := <-waiting:
+			if !ok {
+				return batch
+			}
+			batch = append(batch, received)
+		default:
+			return batch
+		}
+	}
+	return batch
+}
+
+// save keeps trying, because this is the only copy of the datagrams. Saving a
 // contact again changes nothing, so a retry can start from the top. Shutting down
 // is the one thing that ends the tries early.
-func (l *Listener) save(ctx context.Context, received datagram) {
+func (l *Listener) save(ctx context.Context, batch []datagram) {
 	storeCtx := context.WithoutCancel(ctx)
 	for {
-		err := l.handle(storeCtx, received)
+		err := l.handle(storeCtx, batch...)
 		if err == nil {
 			return
 		}
@@ -262,7 +284,32 @@ func (l *Listener) save(ctx context.Context, received datagram) {
 	}
 }
 
-func (l *Listener) handle(ctx context.Context, received datagram) error {
+// handle saves datagrams in one commit, then counts what they held. A failed commit
+// saves none of them, and a retry starts over, so nothing is counted twice.
+func (l *Listener) handle(ctx context.Context, batch ...datagram) error {
+	queued, outside := 0, 0
+	err := l.store.Batch(ctx, func(ctx context.Context) error {
+		queued, outside = 0, 0
+		for _, received := range batch {
+			q, o, err := l.handleDatagram(ctx, received)
+			if err != nil {
+				return err
+			}
+			queued, outside = queued+q, outside+o
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	l.setStatus(func(status *Status) { status.Outside += outside })
+	l.queued(queued)
+	return nil
+}
+
+// handleDatagram saves what a datagram holds, and returns how many contacts it
+// queued and how many were outside the event.
+func (l *Listener) handleDatagram(ctx context.Context, received datagram) (queued, outside int, err error) {
 	text, station := received.data, func(fields map[string]string) string { return adifStation(fields, received.from) }
 	if l.kind == WSJTX {
 		id, logged, _ := wsjtxLogged(received.data)
@@ -272,22 +319,19 @@ func (l *Listener) handle(ctx context.Context, received datagram) error {
 	}
 	records, _, _ := adif.Scan(text)
 	if len(records) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	start, end, known, err := l.store.EventPeriod(ctx)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	inEvent := func(when time.Time) bool { return !known || (!when.Before(start) && !when.After(end)) }
 
-	// Contacts saved before a failure count now, because a retry finds them saved.
-	queued, outside := 0, 0
-	defer func() { l.queued(queued) }()
 	for _, record := range records {
 		result, err := l.saveRecord(ctx, record, station(record.Fields), inEvent)
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 		switch result {
 		case recordQueued:
@@ -296,9 +340,7 @@ func (l *Listener) handle(ctx context.Context, received datagram) error {
 			outside++
 		}
 	}
-
-	l.setStatus(func(status *Status) { status.Outside += outside })
-	return nil
+	return queued, outside, nil
 }
 
 type recordResult int

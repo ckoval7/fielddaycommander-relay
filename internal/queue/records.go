@@ -23,7 +23,7 @@ type LoggerRecord struct {
 
 // LoggerRecords returns the log and the last number handed out.
 func (q *Queue) LoggerRecords(ctx context.Context) ([]LoggerRecord, int, error) {
-	rows, err := q.db.QueryContext(ctx, `SELECT number, idempotency_key, fields FROM logger_records ORDER BY number`)
+	rows, err := q.conn(ctx).QueryContext(ctx, `SELECT number, idempotency_key, fields FROM logger_records ORDER BY number`)
 	if err != nil {
 		return nil, 0, fmt.Errorf("read log: %w", err)
 	}
@@ -69,7 +69,7 @@ func (q *Queue) SaveLoggerRecord(ctx context.Context, record LoggerRecord, count
 	if err != nil {
 		return fmt.Errorf("save log: %w", err)
 	}
-	_, err = q.db.ExecContext(ctx,
+	_, err = q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO logger_records (number, idempotency_key, fields) VALUES (?, ?, ?)
 		 ON CONFLICT (number) DO UPDATE SET idempotency_key = excluded.idempotency_key, fields = excluded.fields`,
 		record.Number, record.Key, string(fields))
@@ -81,7 +81,7 @@ func (q *Queue) SaveLoggerRecord(ctx context.Context, record LoggerRecord, count
 
 // DeleteLoggerRecord removes a record and stores the last number handed out.
 func (q *Queue) DeleteLoggerRecord(ctx context.Context, number, counter int) error {
-	if _, err := q.db.ExecContext(ctx, `DELETE FROM logger_records WHERE number = ?`, number); err != nil {
+	if _, err := q.conn(ctx).ExecContext(ctx, `DELETE FROM logger_records WHERE number = ?`, number); err != nil {
 		return fmt.Errorf("save log: %w", err)
 	}
 	return q.SetMeta(ctx, loggerCounterName, strconv.Itoa(counter))
@@ -101,7 +101,7 @@ type N1MMRecord struct {
 // N1MMRecord finds a contact by N1MM's id.
 func (q *Queue) N1MMRecord(ctx context.Context, id string) (N1MMRecord, bool, error) {
 	record := N1MMRecord{ID: id}
-	err := q.db.QueryRowContext(ctx, `SELECT idempotency_key, callsign, qso_time, station FROM n1mm_records WHERE id = ?`, id).
+	err := q.conn(ctx).QueryRowContext(ctx, `SELECT idempotency_key, callsign, qso_time, station FROM n1mm_records WHERE id = ?`, id).
 		Scan(&record.Key, &record.Callsign, &record.QSOTime, &record.Station)
 	if errors.Is(err, sql.ErrNoRows) {
 		return N1MMRecord{}, false, nil
@@ -114,7 +114,7 @@ func (q *Queue) N1MMRecord(ctx context.Context, id string) (N1MMRecord, bool, er
 
 // SaveN1MMRecord remembers a contact's current key.
 func (q *Queue) SaveN1MMRecord(ctx context.Context, record N1MMRecord) error {
-	_, err := q.db.ExecContext(ctx,
+	_, err := q.conn(ctx).ExecContext(ctx,
 		`INSERT INTO n1mm_records (id, idempotency_key, callsign, qso_time, station) VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET idempotency_key = excluded.idempotency_key, callsign = excluded.callsign,
 		 qso_time = excluded.qso_time, station = excluded.station`,
@@ -127,7 +127,7 @@ func (q *Queue) SaveN1MMRecord(ctx context.Context, record N1MMRecord) error {
 
 // DeleteN1MMRecord forgets a contact N1MM deleted.
 func (q *Queue) DeleteN1MMRecord(ctx context.Context, id string) error {
-	if _, err := q.db.ExecContext(ctx, `DELETE FROM n1mm_records WHERE id = ?`, id); err != nil {
+	if _, err := q.conn(ctx).ExecContext(ctx, `DELETE FROM n1mm_records WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("delete N1MM record: %w", err)
 	}
 	return nil
