@@ -52,6 +52,7 @@ VIAddVersionKey "LegalCopyright" "2026 ${PUBLISHER}. GPL-3.0-or-later."
 
 !define MUI_WELCOMEPAGE_TEXT "This installs ${PRODUCT} ${VERSION} for your Windows account. You don't need administrator rights.$\r$\n$\r$\nTo update, run the new installer. Your saved contacts and server connection are kept."
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "LICENSES\GPL-3.0-or-later.txt"
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
 !define MUI_FINISHPAGE_RUN "$INSTDIR\relay.exe"
