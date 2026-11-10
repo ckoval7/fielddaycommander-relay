@@ -40,6 +40,10 @@
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
           {
+            "context": "source-branch",
+            "integration_id": 15368
+          },
+          {
             "context": "SonarCloud Code Analysis",
             "integration_id": 12526
           }

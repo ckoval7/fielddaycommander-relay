@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Corey Koval <ckoval7@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Enforces the branch flow on pull requests (see CONTRIBUTING.md):
+#
+#   feature branch -> dev -> main
+#
+# main stays the default branch so visitors see the latest release, so most
+# PRs open against main. A feature-branch PR into main is retargeted to dev.
+# Only this repo's dev may merge into main, and main may never merge into dev.
+# The rulesets in .github/rulesets require this job.
+#
+# pull_request_target runs the base branch's copy of this file with a token
+# that can edit the PR. It never checks out or runs the PR's code.
+name: Branch policy
+
+on:
+  pull_request_target:
+    branches: [main, dev]
+    types: [opened, reopened, synchronize, edited]
+
+permissions: {}
+
+jobs:
+  source-branch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check the source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          own_branch=false
+          if [ "$HEAD_REPO" = "$REPO" ]; then
+            own_branch=true
+          fi
+
+          if [ "$BASE" = main ]; then
+            if [ "$own_branch" = true ] && [ "$HEAD" = dev ]; then
+              echo "$HEAD_REPO:$HEAD -> main is allowed."
+              exit 0
+            fi
+            if [ "$own_branch" = true ] && [ "$HEAD" = main ]; then
+              echo "::error::Only $REPO:dev may merge into main."
+              exit 1
+            fi
+            gh pr edit "$NUMBER" --repo "$REPO" --base dev
+            echo "::notice::Feature branches merge into dev, so this PR now targets dev."
+            exit 0
+          fi
+
+          if [ "$own_branch" = true ] && [ "$HEAD" = main ]; then
+            echo "::error::Only feature branches may merge into dev, not main."
+            exit 1
+          fi
+          echo "$HEAD_REPO:$HEAD -> $BASE is allowed."

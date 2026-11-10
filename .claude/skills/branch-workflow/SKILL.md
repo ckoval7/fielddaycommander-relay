@@ -20,7 +20,9 @@ Work flows **feature branch → `dev` → `main`**.
 
 ## GitHub protection
 
-`.github/rulesets/main.json` and `dev.json` define the rulesets: no deletion, no force-push and changes by PR. Repo admins bypass them, which is how the user's pushes to `dev` and `main` still work. `main` also requires `SonarCloud Code Analysis`, pinned to the app's integration id 12526 so nothing else can post a passing check under that name. `dev` doesn't, because scans only run on PRs into `main`.
+`.github/rulesets/main.json` and `dev.json` define the rulesets: no deletion, no force-push and changes by PR. Repo admins bypass them, which is how the user's pushes to `dev` and `main` still work. Both require `source-branch` from `.github/workflows/branch-policy.yml`, pinned to GitHub Actions' integration id 15368, which retargets a feature-branch PR from `main` to `dev` and fails any other PR that breaks the flow. `main` also requires `SonarCloud Code Analysis`, pinned to the app's integration id 12526 so nothing else can post a passing check under that name. `dev` doesn't, because scans only run on PRs into `main`.
+
+`branch-policy.yml` runs on `pull_request_target`, so GitHub uses the copy on the PR's base branch. Apply a ruleset that requires `source-branch` only once the workflow is on that branch, or PRs wait forever for a check that never starts.
 
 To change a ruleset, edit its file, find its id with `gh api repos/ckoval7/fielddaycommander-relay/rulesets`, and `PUT` the file to `.../rulesets/<id>`.
 
